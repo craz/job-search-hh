@@ -1,0 +1,16 @@
+.venv/
+.direnv/
+.local/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+browser-profile/
+data/
+logs/
+generated/
+*.log
+*.jsonl
+

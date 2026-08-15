@@ -1,0 +1,18 @@
+---
+description: Chromium, Playwright, noVNC и persistent profile
+alwaysApply: false
+globs:
+  - "**/*browser*"
+  - "**/*playwright*"
+  - "**/Dockerfile"
+  - "**/compose*.yaml"
+---
+
+# Browser automation
+
+- Chromium/Playwright/noVNC работают внутри HH container.
+- Browser profile хранится в HH named volume и защищён single-process lock.
+- Не запускай второй Chromium с тем же profile.
+- Browser downloads и image pulls согласуются при проблемах окружения.
+- BDD использует synthetic pages/fake transport и не отправляет отклики.
+

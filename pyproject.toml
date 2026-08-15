@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "job-search-hh"
+version = "0.1.0"
+description = "Safe HeadHunter integration boundary for a local job-search system"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "mypy>=1.17,<2",
+  "pytest>=8.4,<9",
+  "pytest-bdd>=8.1,<9",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+job-search-hh = "job_search_hh.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/job_search_hh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config"
+filterwarnings = ["error"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["job_search_hh"]
+

@@ -1,0 +1,10 @@
+.env
+.env.local
+.local/
+browser-profile/
+tokens/
+data/
+logs/
+*.log
+*.jsonl
+

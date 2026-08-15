@@ -1,0 +1,13 @@
+---
+description: Минимальные глобальные границы HH-интеграции
+alwaysApply: true
+---
+
+# HH safety
+
+- Не читать Core PostgreSQL и не импортировать код sibling repositories.
+- Не выполнять реальные HH writes без явного разрешения.
+- CAPTCHA, auth error и uncertain submit state останавливают automation.
+- Не публиковать tokens, cookies, browser profile, PII или raw conversations.
+- Коммить только green шаг; push и release требуют запроса.
+
