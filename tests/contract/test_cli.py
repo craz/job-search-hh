@@ -1,6 +1,6 @@
-"""Contract tests for the versioned JSON capabilities command."""
+"""Contract tests for the versioned JSON capabilities and sync CLI surface."""
 
-from job_search_hh.cli import capabilities_envelope
+from job_search_hh.cli import build_parser, capabilities_envelope
 
 
 def test_capabilities_envelope_has_stable_version_and_identity() -> None:
@@ -11,3 +11,15 @@ def test_capabilities_envelope_has_stable_version_and_identity() -> None:
     assert envelope.ok is True
     assert envelope.data["component"] == "job-search-hh"
     assert envelope.data["external_writes_enabled"] is False
+    assert envelope.data["hh_api"] == "read-only"
+
+
+def test_cli_exposes_read_only_vacancy_sync() -> None:
+    """Apply stays out of the parser; vacancy sync is the only write path to Core."""
+    parser = build_parser()
+    args = parser.parse_args(["vacancies", "sync", "--text", "python", "--per-page", "3"])
+
+    assert args.command == "vacancies"
+    assert args.vacancies_command == "sync"
+    assert args.text == "python"
+    assert args.per_page == 3

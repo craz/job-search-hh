@@ -9,4 +9,4 @@ def test_external_writes_are_disabled_by_default() -> None:
 
     assert capabilities.external_writes_enabled is False
     assert capabilities.browser_automation == "not-configured"
-    assert capabilities.hh_api == "not-configured"
+    assert capabilities.hh_api == "read-only"

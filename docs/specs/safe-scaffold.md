@@ -12,12 +12,12 @@
 
 - Python package and versioned JSON capabilities CLI;
 - explicit `external_writes_enabled=false` safety default;
+- `hh_api=read-only` once vacancy sync is available;
 - unit, contract and executable pytest-bdd checks;
 - reproducible local/CI interfaces and minimal diagnostic Dockerfile.
 
 ## Non-scope
 
-HH OAuth/API, Chromium, Playwright, noVNC, persistent profile, Core sync and all
-apply operations are not implemented in this scaffold. Their dependencies and
-runtime artifacts must be introduced and verified in dedicated vertical slices.
-
+OAuth, Chromium, Playwright, noVNC, persistent profile and all apply operations
+remain out of the scaffold. Vacancy read/sync is covered by
+[vacancy-sync.md](vacancy-sync.md).

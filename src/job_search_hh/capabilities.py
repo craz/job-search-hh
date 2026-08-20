@@ -1,8 +1,7 @@
 """Machine-readable declaration of the HH integration's safe current scope.
 
-The scaffold deliberately performs no network or browser operation. Capability
-metadata prevents consumers from mistaking an installed package for configured
-automation and makes the external-write default explicit in tests and CLI output.
+Capability metadata prevents consumers from mistaking an installed package for
+configured automation and keeps the external-write default explicit.
 """
 
 from __future__ import annotations
@@ -36,6 +35,6 @@ def current_capabilities() -> Capabilities:
         component=COMPONENT_NAME,
         version=__version__,
         browser_automation="not-configured",
-        hh_api="not-configured",
+        hh_api="read-only",
         external_writes_enabled=False,
     )
