@@ -41,3 +41,12 @@ def test_cli_exposes_read_only_metrics_sync() -> None:
     assert args.command == "metrics"
     assert args.metrics_command == "sync"
     assert str(args.fixture) == "metrics.json"
+
+
+def test_cli_exposes_apply_dry_run() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["apply", "dry-run", "--fixture", "plan.json"])
+
+    assert args.command == "apply"
+    assert args.apply_command == "dry-run"
+    assert str(args.fixture) == "plan.json"

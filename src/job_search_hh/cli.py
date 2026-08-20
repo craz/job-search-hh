@@ -1,4 +1,4 @@
-"""Versioned JSON command-line interface for HH read-only Core sync."""
+"""Versioned JSON command-line interface for HH read-only Core sync and dry-run apply."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from job_search_hh.apply import ApplyError, dry_run_apply, load_apply_plan
 from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
@@ -26,7 +27,7 @@ class Envelope:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Define capabilities and read-only sync; apply remains unavailable."""
+    """Define capabilities, read-only sync and apply dry-run; live apply stays unavailable."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -65,6 +66,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Synthetic daily metrics JSON (live HH stats API is out of scope)",
+    )
+
+    apply = sub.add_parser("apply", help="Guarded application operations")
+    apply_sub = apply.add_subparsers(dest="apply_command", required=True)
+    dry_run = apply_sub.add_parser("dry-run", help="Simulate HH apply payloads without submitting")
+    dry_run.add_argument(
+        "--fixture",
+        type=Path,
+        required=True,
+        help="Synthetic apply plan JSON (never contacts HH write endpoints)",
     )
     return parser
 
@@ -115,6 +126,16 @@ def metric_sync_envelope(args: argparse.Namespace) -> Envelope:
     return Envelope(schema_version=1, ok=True, data=report)
 
 
+def apply_dry_run_envelope(args: argparse.Namespace) -> Envelope:
+    """Simulate apply payloads and return audit JSON without HH or Core writes."""
+    try:
+        report = dry_run_apply(load_apply_plan(args.fixture))
+    except ApplyError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    ok = not report["errors"] and report["hh_write_attempted"] is False
+    return Envelope(schema_version=1, ok=ok, data=report)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print exactly one JSON envelope and return a process-compatible status."""
     args = build_parser().parse_args(argv)
@@ -126,6 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = application_sync_envelope(args)
     elif args.command == "metrics" and args.metrics_command == "sync":
         envelope = metric_sync_envelope(args)
+    elif args.command == "apply" and args.apply_command == "dry-run":
+        envelope = apply_dry_run_envelope(args)
     else:  # pragma: no cover - argparse enforces choices
         return 2
     print(json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True))

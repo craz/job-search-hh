@@ -22,5 +22,6 @@ Repeated sync of the same HH application identity does not create duplicates.
 
 ## Non-scope
 
-Live authenticated negotiations API, OAuth, browser/profile, dry-run/limited
-apply, metrics aggregation and chats remain out of this slice.
+Live authenticated negotiations API, OAuth, browser/profile, limited apply and
+chats remain out of this slice. Planned HH submit simulation lives in
+[apply-dry-run.md](apply-dry-run.md).
