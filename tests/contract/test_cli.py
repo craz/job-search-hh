@@ -32,3 +32,12 @@ def test_cli_exposes_read_only_application_sync() -> None:
     assert args.command == "applications"
     assert args.applications_command == "sync"
     assert str(args.fixture) == "apps.json"
+
+
+def test_cli_exposes_read_only_metrics_sync() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["metrics", "sync", "--fixture", "metrics.json"])
+
+    assert args.command == "metrics"
+    assert args.metrics_command == "sync"
+    assert str(args.fixture) == "metrics.json"

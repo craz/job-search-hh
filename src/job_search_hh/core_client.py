@@ -21,6 +21,10 @@ class CoreGateway(Protocol):
         self, payload: dict[str, Any], idempotency_key: str
     ) -> dict[str, Any]: ...
 
+    def upsert_metric(
+        self, metric_date: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]: ...
+
 
 class CoreClient:
     """Write vacancies/applications only through Core's versioned HTTP contract."""
@@ -88,6 +92,17 @@ class CoreClient:
         return self._request(
             "POST",
             "/api/v1/applications",
+            payload=payload,
+            headers={"Idempotency-Key": idempotency_key},
+        )
+
+    def upsert_metric(
+        self, metric_date: str, payload: dict[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        """Create or replay one daily metric snapshot under a mandatory Idempotency-Key."""
+        return self._request(
+            "PUT",
+            f"/api/v1/metrics/{metric_date}",
             payload=payload,
             headers={"Idempotency-Key": idempotency_key},
         )

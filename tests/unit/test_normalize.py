@@ -3,7 +3,9 @@
 from job_search_hh.normalize import (
     application_idempotency_key,
     idempotency_key,
+    metric_idempotency_key,
     normalize_application,
+    normalize_metric,
     normalize_vacancy,
 )
 
@@ -63,3 +65,18 @@ def test_normalize_application_maps_negotiation_state() -> None:
         "result": "interview",
     }
     assert application_idempotency_key("neg-9") == "hh:application:neg-9"
+
+
+def test_normalize_metric_maps_daily_snapshot() -> None:
+    metric_date, payload = normalize_metric(
+        {
+            "metric_date": "2026-08-20",
+            "views_total": 10,
+            "applications": 2,
+            "notes": "day",
+        }
+    )
+
+    assert metric_date == "2026-08-20"
+    assert payload == {"views_total": 10, "applications": 2, "notes": "day"}
+    assert metric_idempotency_key(metric_date, payload).startswith("hh:metric:2026-08-20:")

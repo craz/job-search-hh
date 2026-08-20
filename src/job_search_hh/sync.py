@@ -10,11 +10,18 @@ from job_search_hh.normalize import (
     NormalizeError,
     application_idempotency_key,
     idempotency_key,
+    metric_idempotency_key,
     normalize_application,
+    normalize_metric,
     normalize_vacancy,
     vacancy_external_id_from_application,
 )
-from job_search_hh.providers import ApplicationProvider, ProviderError, VacancyProvider
+from job_search_hh.providers import (
+    ApplicationProvider,
+    MetricProvider,
+    ProviderError,
+    VacancyProvider,
+)
 
 
 class SyncError(Exception):
@@ -106,6 +113,45 @@ def sync_applications(provider: ApplicationProvider, core: CoreGateway) -> dict[
             )
         except (NormalizeError, CoreError) as error:
             errors.append({"external_id": str(item.get("id") or ""), "error": str(error)})
+
+    return {
+        "fetched": len(items),
+        "synced": len(created),
+        "items": created,
+        "errors": errors,
+        "external_writes_enabled": False,
+    }
+
+
+def sync_metrics(provider: MetricProvider, core: CoreGateway) -> dict[str, Any]:
+    """Import daily metric snapshots into Core without HH side effects."""
+    try:
+        items = provider.list_metrics()
+    except ProviderError as error:
+        raise SyncError(str(error)) from error
+
+    created: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for item in items:
+        try:
+            metric_date, payload = normalize_metric(item)
+            metric = core.upsert_metric(
+                metric_date, payload, metric_idempotency_key(metric_date, payload)
+            )
+            created.append(
+                {
+                    "metric_date": metric_date,
+                    "applications": metric.get("applications", payload.get("applications")),
+                    "views_total": metric.get("views_total", payload.get("views_total")),
+                }
+            )
+        except (NormalizeError, CoreError) as error:
+            errors.append(
+                {
+                    "metric_date": str(item.get("metric_date") or item.get("date") or ""),
+                    "error": str(error),
+                }
+            )
 
     return {
         "fetched": len(items),

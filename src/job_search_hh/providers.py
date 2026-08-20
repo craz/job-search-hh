@@ -22,6 +22,10 @@ class ApplicationProvider(Protocol):
     def list_applications(self) -> list[dict[str, Any]]: ...
 
 
+class MetricProvider(Protocol):
+    def list_metrics(self) -> list[dict[str, Any]]: ...
+
+
 class FixtureProvider:
     """Synthetic HH search hits for BDD and offline CLI use."""
 
@@ -43,6 +47,10 @@ class FixtureProvider:
 
     def list_applications(self) -> list[dict[str, Any]]:
         """Reuse the same fixture document shape for application sync."""
+        return list(self.items)
+
+    def list_metrics(self) -> list[dict[str, Any]]:
+        """Reuse the same fixture document shape for daily metric sync."""
         return list(self.items)
 
 

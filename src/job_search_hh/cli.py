@@ -13,7 +13,7 @@ from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
 from job_search_hh.providers import FixtureProvider, HttpHhApi
-from job_search_hh.sync import SyncError, sync_applications, sync_vacancies
+from job_search_hh.sync import SyncError, sync_applications, sync_metrics, sync_vacancies
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,18 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Synthetic negotiations/applications JSON (live auth API is out of scope)",
     )
+
+    metrics = sub.add_parser("metrics", help="Read-only daily metric operations")
+    metrics_sub = metrics.add_subparsers(dest="metrics_command", required=True)
+    metric_sync = metrics_sub.add_parser(
+        "sync", help="Import daily metric snapshots into Core from a fixture"
+    )
+    metric_sync.add_argument(
+        "--fixture",
+        type=Path,
+        required=True,
+        help="Synthetic daily metrics JSON (live HH stats API is out of scope)",
+    )
     return parser
 
 
@@ -91,6 +103,18 @@ def application_sync_envelope(args: argparse.Namespace) -> Envelope:
     return Envelope(schema_version=1, ok=True, data=report)
 
 
+def metric_sync_envelope(args: argparse.Namespace) -> Envelope:
+    """Import fixture daily metrics without contacting authenticated HH stats APIs."""
+    settings = Settings.from_env()
+    provider = FixtureProvider.from_path(args.fixture)
+    core = CoreClient(settings.core_url, settings.timeout_seconds)
+    try:
+        report = sync_metrics(provider, core)
+    except SyncError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    return Envelope(schema_version=1, ok=True, data=report)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print exactly one JSON envelope and return a process-compatible status."""
     args = build_parser().parse_args(argv)
@@ -100,6 +124,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = vacancy_sync_envelope(args)
     elif args.command == "applications" and args.applications_command == "sync":
         envelope = application_sync_envelope(args)
+    elif args.command == "metrics" and args.metrics_command == "sync":
+        envelope = metric_sync_envelope(args)
     else:  # pragma: no cover - argparse enforces choices
         return 2
     print(json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True))

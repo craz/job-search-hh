@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 SOURCE = "hh"
@@ -100,3 +102,48 @@ def vacancy_external_id_from_application(item: dict[str, Any]) -> str:
     if isinstance(vacancy, dict):
         return _text(vacancy.get("id") or vacancy.get("external_id"))
     return _text(item.get("vacancy_id") or item.get("vacancy_external_id"))
+
+
+_METRIC_FIELDS = (
+    "views_total",
+    "views_new",
+    "applications",
+    "replies",
+    "invitations",
+    "rejections",
+    "notes",
+)
+
+
+def normalize_metric(item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Map one daily snapshot to Core metric_date path + DailyMetricUpdate body."""
+    metric_date = _text(item.get("metric_date") or item.get("date"))
+    if not metric_date:
+        raise NormalizeError("incomplete_metric")
+    payload: dict[str, Any] = {}
+    for field in _METRIC_FIELDS:
+        if field not in item or item[field] is None:
+            continue
+        if field == "notes":
+            notes = _text(item[field])
+            if notes:
+                payload["notes"] = notes
+            continue
+        try:
+            value = int(item[field])
+        except (TypeError, ValueError) as error:
+            raise NormalizeError(f"invalid_metric_{field}") from error
+        if value < 0:
+            raise NormalizeError(f"invalid_metric_{field}")
+        payload[field] = value
+    if not payload:
+        raise NormalizeError("empty_metric_update")
+    return metric_date, payload
+
+
+def metric_idempotency_key(metric_date: str, payload: dict[str, Any]) -> str:
+    """Fingerprint date + values so identical replays stay safe."""
+    digest = hashlib.sha256(
+        json.dumps({"metric_date": metric_date, "values": payload}, sort_keys=True).encode()
+    ).hexdigest()[:16]
+    return f"hh:metric:{metric_date}:{digest}"
