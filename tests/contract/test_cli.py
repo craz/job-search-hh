@@ -23,3 +23,12 @@ def test_cli_exposes_read_only_vacancy_sync() -> None:
     assert args.vacancies_command == "sync"
     assert args.text == "python"
     assert args.per_page == 3
+
+
+def test_cli_exposes_read_only_application_sync() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["applications", "sync", "--fixture", "apps.json"])
+
+    assert args.command == "applications"
+    assert args.applications_command == "sync"
+    assert str(args.fixture) == "apps.json"

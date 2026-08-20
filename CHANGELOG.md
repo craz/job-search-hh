@@ -8,7 +8,9 @@ Semantic Versioning.
 ### Added
 
 - Read-only HH vacancy sync into Core (`vacancies sync` CLI, fixture or public API).
-- Normalization to Core VacancyCreate with stable `source=hh` and idempotent keys.
+- Fixture-based HH application sync into Core (`applications sync --fixture`).
+- Normalization to Core VacancyCreate/ApplicationCreate with stable `source=hh`
+  and idempotent keys.
 - Capabilities report `hh_api=read-only` while keeping `external_writes_enabled=false`.
 
 ### Changed

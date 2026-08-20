@@ -1,4 +1,4 @@
-"""Versioned JSON command-line interface for HH read-only vacancy sync."""
+"""Versioned JSON command-line interface for HH read-only Core sync."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
 from job_search_hh.providers import FixtureProvider, HttpHhApi
-from job_search_hh.sync import SyncError, sync_vacancies
+from job_search_hh.sync import SyncError, sync_applications, sync_vacancies
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class Envelope:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Define capabilities and read-only vacancy sync; apply remains unavailable."""
+    """Define capabilities and read-only sync; apply remains unavailable."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -42,6 +42,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Synthetic HH JSON fixture instead of the live public API",
     )
+
+    applications = sub.add_parser("applications", help="Read-only application operations")
+    applications_sub = applications.add_subparsers(dest="applications_command", required=True)
+    app_sync = applications_sub.add_parser(
+        "sync", help="Import existing HH applications into Core from a fixture"
+    )
+    app_sync.add_argument(
+        "--fixture",
+        type=Path,
+        required=True,
+        help="Synthetic negotiations/applications JSON (live auth API is out of scope)",
+    )
     return parser
 
 
@@ -50,8 +62,8 @@ def capabilities_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=current_capabilities().to_dict())
 
 
-def sync_envelope(args: argparse.Namespace) -> Envelope:
-    """Run one read-only sync and wrap the report for machine consumers."""
+def vacancy_sync_envelope(args: argparse.Namespace) -> Envelope:
+    """Run one read-only vacancy sync and wrap the report for machine consumers."""
     settings = Settings.from_env()
     if args.fixture is not None:
         provider: FixtureProvider | HttpHhApi = FixtureProvider.from_path(args.fixture)
@@ -67,13 +79,27 @@ def sync_envelope(args: argparse.Namespace) -> Envelope:
     return Envelope(schema_version=1, ok=True, data=report)
 
 
+def application_sync_envelope(args: argparse.Namespace) -> Envelope:
+    """Import fixture applications without contacting authenticated HH write APIs."""
+    settings = Settings.from_env()
+    provider = FixtureProvider.from_path(args.fixture)
+    core = CoreClient(settings.core_url, settings.timeout_seconds)
+    try:
+        report = sync_applications(provider, core)
+    except SyncError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    return Envelope(schema_version=1, ok=True, data=report)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print exactly one JSON envelope and return a process-compatible status."""
     args = build_parser().parse_args(argv)
     if args.command == "capabilities":
         envelope = capabilities_envelope()
     elif args.command == "vacancies" and args.vacancies_command == "sync":
-        envelope = sync_envelope(args)
+        envelope = vacancy_sync_envelope(args)
+    elif args.command == "applications" and args.applications_command == "sync":
+        envelope = application_sync_envelope(args)
     else:  # pragma: no cover - argparse enforces choices
         return 2
     print(json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True))

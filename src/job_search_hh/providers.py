@@ -18,6 +18,10 @@ class VacancyProvider(Protocol):
     def search(self, *, text: str, per_page: int) -> list[dict[str, Any]]: ...
 
 
+class ApplicationProvider(Protocol):
+    def list_applications(self) -> list[dict[str, Any]]: ...
+
+
 class FixtureProvider:
     """Synthetic HH search hits for BDD and offline CLI use."""
 
@@ -36,6 +40,10 @@ class FixtureProvider:
     def search(self, *, text: str, per_page: int) -> list[dict[str, Any]]:
         del text
         return self.items[: max(per_page, 0)]
+
+    def list_applications(self) -> list[dict[str, Any]]:
+        """Reuse the same fixture document shape for application sync."""
+        return list(self.items)
 
 
 class HttpHhApi:

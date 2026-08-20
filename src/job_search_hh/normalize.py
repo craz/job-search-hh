@@ -58,3 +58,45 @@ def normalize_vacancy(item: dict[str, Any]) -> dict[str, Any]:
 def idempotency_key(external_id: str) -> str:
     """Stable replay key for one HH vacancy identity."""
     return f"hh:vacancy:{external_id}"
+
+
+def application_idempotency_key(external_id: str) -> str:
+    """Stable replay key for one HH application/negotiation identity."""
+    return f"hh:application:{external_id}"
+
+
+_RESULT_MAP = {
+    "response": "reply",
+    "reply": "reply",
+    "interview": "interview",
+    "discard": "rejected",
+    "rejected": "rejected",
+    "offer": "offer",
+}
+
+
+def normalize_application(item: dict[str, Any], *, vacancy_id: str) -> dict[str, Any]:
+    """Map one HH negotiation/application fact to Core ApplicationCreate."""
+    external_id = _text(item.get("id") or item.get("external_id"))
+    if not external_id or not vacancy_id.strip():
+        raise NormalizeError("incomplete_application")
+    payload: dict[str, Any] = {
+        "vacancy_id": vacancy_id,
+        "source": SOURCE,
+        "external_id": external_id,
+    }
+    applied_at = _text(item.get("created_at") or item.get("applied_at"))
+    if applied_at:
+        payload["applied_at"] = applied_at
+    state = _text(item.get("state") or item.get("result")).casefold()
+    if state in _RESULT_MAP:
+        payload["result"] = _RESULT_MAP[state]
+    return payload
+
+
+def vacancy_external_id_from_application(item: dict[str, Any]) -> str:
+    """Extract the HH vacancy identity referenced by a negotiation payload."""
+    vacancy = item.get("vacancy")
+    if isinstance(vacancy, dict):
+        return _text(vacancy.get("id") or vacancy.get("external_id"))
+    return _text(item.get("vacancy_id") or item.get("vacancy_external_id"))

@@ -1,12 +1,20 @@
-"""Read-only vacancy synchronization from HH into Core."""
+"""Read-only vacancy and application synchronization from HH into Core."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from job_search_hh.core_client import CoreError, CoreGateway
-from job_search_hh.normalize import NormalizeError, idempotency_key, normalize_vacancy
-from job_search_hh.providers import ProviderError, VacancyProvider
+from job_search_hh.normalize import (
+    SOURCE,
+    NormalizeError,
+    application_idempotency_key,
+    idempotency_key,
+    normalize_application,
+    normalize_vacancy,
+    vacancy_external_id_from_application,
+)
+from job_search_hh.providers import ApplicationProvider, ProviderError, VacancyProvider
 
 
 class SyncError(Exception):
@@ -44,6 +52,62 @@ def sync_vacancies(
 
     return {
         "text": text,
+        "fetched": len(items),
+        "synced": len(created),
+        "items": created,
+        "errors": errors,
+        "external_writes_enabled": False,
+    }
+
+
+def _resolve_vacancy_id(core: CoreGateway, item: dict[str, Any]) -> str:
+    vacancy_external_id = vacancy_external_id_from_application(item)
+    if not vacancy_external_id:
+        raise NormalizeError("missing_vacancy_reference")
+
+    for vacancy in core.list_vacancies():
+        if (
+            vacancy.get("source") == SOURCE
+            and str(vacancy.get("external_id")) == vacancy_external_id
+        ):
+            return str(vacancy["id"])
+
+    embedded = item.get("vacancy")
+    if isinstance(embedded, dict) and (embedded.get("name") or embedded.get("title")):
+        payload = normalize_vacancy(embedded)
+        created = core.create_vacancy(payload, idempotency_key(str(payload["external_id"])))
+        return str(created["id"])
+
+    raise CoreError(f"vacancy_not_found:{vacancy_external_id}")
+
+
+def sync_applications(provider: ApplicationProvider, core: CoreGateway) -> dict[str, Any]:
+    """Import existing HH applications into Core without submitting new ones."""
+    try:
+        items = provider.list_applications()
+    except ProviderError as error:
+        raise SyncError(str(error)) from error
+
+    created: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for item in items:
+        try:
+            vacancy_id = _resolve_vacancy_id(core, item)
+            payload = normalize_application(item, vacancy_id=vacancy_id)
+            application = core.create_application(
+                payload, application_idempotency_key(str(payload["external_id"]))
+            )
+            created.append(
+                {
+                    "external_id": payload["external_id"],
+                    "core_id": application.get("id"),
+                    "vacancy_id": vacancy_id,
+                }
+            )
+        except (NormalizeError, CoreError) as error:
+            errors.append({"external_id": str(item.get("id") or ""), "error": str(error)})
+
+    return {
         "fetched": len(items),
         "synced": len(created),
         "items": created,
