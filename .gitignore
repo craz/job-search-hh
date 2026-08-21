@@ -11,4 +11,6 @@ __pycache__/
 dist/
 build/
 .local/
+.hh-state/
+.hh-profile/
 

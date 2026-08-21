@@ -13,6 +13,7 @@
 - Python package and versioned JSON capabilities CLI;
 - explicit `external_writes_enabled=false` safety default;
 - `hh_api=read-only` once vacancy sync is available;
+- `browser_automation=scaffold` once profile/state paths exist without Chromium;
 - unit, contract and executable pytest-bdd checks;
 - reproducible local/CI interfaces and minimal diagnostic Dockerfile.
 

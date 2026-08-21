@@ -34,7 +34,7 @@ def current_capabilities() -> Capabilities:
     return Capabilities(
         component=COMPONENT_NAME,
         version=__version__,
-        browser_automation="not-configured",
+        browser_automation="scaffold",
         hh_api="read-only",
         external_writes_enabled=False,
     )

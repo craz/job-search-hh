@@ -14,6 +14,7 @@ from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
 from job_search_hh.providers import FixtureProvider, HttpHhApi
+from job_search_hh.session import auth_status, session_status
 from job_search_hh.sync import SyncError, sync_applications, sync_metrics, sync_vacancies
 
 
@@ -93,6 +94,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Explicit operator authorization required together with env writes enable",
     )
+
+    session = sub.add_parser("session", help="Browser/profile session scaffold diagnostics")
+    session_sub = session.add_subparsers(dest="session_command", required=True)
+    session_sub.add_parser(
+        "status", help="Report profile/state scaffold without launching Chromium"
+    )
+
+    auth = sub.add_parser("auth", help="Authentication scaffold diagnostics")
+    auth_sub = auth.add_subparsers(dest="auth_command", required=True)
+    auth_sub.add_parser("status", help="Report auth session marker without HH login")
     return parser
 
 
@@ -169,6 +180,16 @@ def apply_limited_envelope(args: argparse.Namespace) -> Envelope:
     return Envelope(schema_version=1, ok=ok, data=report)
 
 
+def session_status_envelope() -> Envelope:
+    """Report browser/profile scaffold without launching Chromium."""
+    return Envelope(schema_version=1, ok=True, data=session_status())
+
+
+def auth_status_envelope() -> Envelope:
+    """Report auth marker without performing HH login."""
+    return Envelope(schema_version=1, ok=True, data=auth_status())
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print exactly one JSON envelope and return a process-compatible status."""
     args = build_parser().parse_args(argv)
@@ -184,6 +205,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = apply_dry_run_envelope(args)
     elif args.command == "apply" and args.apply_command == "limited":
         envelope = apply_limited_envelope(args)
+    elif args.command == "session" and args.session_command == "status":
+        envelope = session_status_envelope()
+    elif args.command == "auth" and args.auth_command == "status":
+        envelope = auth_status_envelope()
     else:  # pragma: no cover - argparse enforces choices
         return 2
     print(json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True))

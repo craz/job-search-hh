@@ -12,6 +12,8 @@ def test_capabilities_envelope_has_stable_version_and_identity() -> None:
     assert envelope.data["component"] == "job-search-hh"
     assert envelope.data["external_writes_enabled"] is False
     assert envelope.data["hh_api"] == "read-only"
+    assert envelope.data["browser_automation"] == "scaffold"
+    assert envelope.data["hh_api"] == "read-only"
 
 
 def test_cli_exposes_read_only_vacancy_sync() -> None:
@@ -62,3 +64,12 @@ def test_cli_exposes_apply_limited_with_authorization_flag() -> None:
     assert args.apply_command == "limited"
     assert args.i_authorize_hh_writes is True
     assert args.limit == 1
+
+
+def test_cli_exposes_session_and_auth_status() -> None:
+    parser = build_parser()
+    session = parser.parse_args(["session", "status"])
+    auth = parser.parse_args(["auth", "status"])
+
+    assert session.command == "session" and session.session_command == "status"
+    assert auth.command == "auth" and auth.auth_command == "status"

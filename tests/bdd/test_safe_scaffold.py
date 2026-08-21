@@ -27,5 +27,5 @@ def external_writes_are_disabled(capabilities: Capabilities) -> None:
 
 @then("browser automation не объявлена готовой")
 def browser_is_not_ready(capabilities: Capabilities) -> None:
-    """Do not report Playwright readiness before its dedicated implementation slice."""
-    assert capabilities.browser_automation == "not-configured"
+    """Scaffold paths may exist, but Chromium/Playwright must not be reported ready."""
+    assert capabilities.browser_automation == "scaffold"

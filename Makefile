@@ -40,6 +40,8 @@ smoke:
 	$(UV) run job-search-hh metrics sync --help >/dev/null
 	$(UV) run job-search-hh apply dry-run --help >/dev/null
 	$(UV) run job-search-hh apply limited --help >/dev/null
+	$(UV) run job-search-hh session status >/dev/null
+	$(UV) run job-search-hh auth status >/dev/null
 
 build:
 	docker build -t job-search-hh:dev .
