@@ -7,17 +7,16 @@ workflows. It communicates with Core only through versioned public contracts.
 
 ## Current status
 
-Read-only vacancy sync, fixture application sync and fixture daily metrics sync
-are implemented. Public HH search (or a fixture) writes vacancies through
-`POST /api/v1/vacancies`; existing negotiations/applications from a fixture write
-through `POST /api/v1/applications`; daily snapshots write through
-`PUT /api/v1/metrics/{date}` with fingerprint idempotency keys.
+Read-only vacancy sync is implemented. Applications and daily metrics sync
+accept a fixture or, without `--fixture`, an authenticated GET `/negotiations`
+(requires `login_ready` plus `JOB_SEARCH_HH_ACCESS_TOKEN` / state `access_token`;
+metrics are derived from negotiations). Public HH search writes vacancies through
+`POST /api/v1/vacancies`; applications and metrics write only to Core.
 Capabilities report `hh_api=read-only` and `external_writes_enabled=false`.
 Browser automation becomes `installed` inside the HH image (Chromium/Playwright/
 noVNC). Operator login uses loopback noVNC plus `auth open-login` /
 `auth confirm --i-confirm-operator-login`; cookies stay in the profile volume and
-are never printed. Live OAuth automation, CAPTCHA bypass and chats are not
-implemented.
+are never printed. OAuth token UI, CAPTCHA bypass and chats are not implemented.
 
 ## Quick start
 
@@ -32,6 +31,9 @@ make smoke
 CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh vacancies sync --text "python" --per-page 3
 CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh applications sync --fixture path/to/apps.json
 CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh metrics sync --fixture path/to/metrics.json
+# live authenticated read (no HH write): login_ready + access token required
+CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh applications sync
+CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh metrics sync
 uv run job-search-hh apply dry-run --fixture path/to/apply_plan.json
 uv run job-search-hh apply limited --fixture path/to/apply_plan.json --i-authorize-hh-writes
 uv run job-search-hh session status
@@ -65,6 +67,7 @@ See [vacancy sync](docs/specs/vacancy-sync.md),
 [apply limited](docs/specs/apply-limited.md),
 [browser/auth scaffold](docs/specs/browser-auth-scaffold.md),
 [operator noVNC login](docs/specs/operator-novnc-login.md),
+[live authenticated read](docs/specs/live-authenticated-read.md),
 [operator login runbook](docs/runbooks/operator-novnc-login.md),
 [safe scaffold](docs/specs/safe-scaffold.md) and executable Gherkin under
 `tests/features/`.

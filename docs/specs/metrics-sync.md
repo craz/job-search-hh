@@ -11,9 +11,11 @@
 ## Implemented
 
 - fixture transport for synthetic daily metric snapshots;
+- live path without `--fixture` derives one UTC daily snapshot from authenticated
+  GET `/negotiations` (`notes=derived_from_negotiations_get`);
 - normalization to Core `DailyMetricUpdate` fields;
 - idempotent Core write via `PUT /api/v1/metrics/{metric_date}`;
-- versioned JSON CLI `metrics sync --fixture`;
+- versioned JSON CLI `metrics sync [--fixture]`;
 - capabilities keep `external_writes_enabled=false`.
 
 Identical snapshot replay under the same fingerprint key does not conflict.
@@ -21,5 +23,4 @@ Changed counts use a new fingerprint key and update the same calendar date.
 
 ## Non-scope
 
-Live authenticated HH stats APIs, browser/profile collection, apply and
-negotiations live sync remain out of this slice.
+Dedicated HH resume-view history scrape, OAuth UI, apply and HH write endpoints.

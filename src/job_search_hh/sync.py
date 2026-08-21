@@ -120,6 +120,7 @@ def sync_applications(provider: ApplicationProvider, core: CoreGateway) -> dict[
         "items": created,
         "errors": errors,
         "external_writes_enabled": False,
+        "hh_write_attempted": False,
     }
 
 
@@ -159,4 +160,5 @@ def sync_metrics(provider: MetricProvider, core: CoreGateway) -> dict[str, Any]:
         "items": created,
         "errors": errors,
         "external_writes_enabled": False,
+        "hh_write_attempted": False,
     }

@@ -17,6 +17,9 @@ Semantic Versioning.
   loopback publish, `session status` reports `installed` when binaries are present.
 - Operator login: `auth open-login` / `auth confirm --i-confirm-operator-login` /
   `auth clear`; `login_ready` only after explicit confirm; no CAPTCHA bypass.
+- Live authenticated read: `applications|metrics sync` without `--fixture` uses
+  Bearer GET `/negotiations` (metrics derived); requires `login_ready` + token;
+  `hh_write_attempted=false`.
 - Browser/auth scaffold CLI (`session`/`auth status`) and profile lock remain the
   operator-facing diagnostics until login is confirmed.
 - Normalization to Core VacancyCreate/ApplicationCreate/DailyMetricUpdate with

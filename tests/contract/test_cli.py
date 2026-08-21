@@ -29,20 +29,24 @@ def test_cli_exposes_read_only_vacancy_sync() -> None:
 
 def test_cli_exposes_read_only_application_sync() -> None:
     parser = build_parser()
-    args = parser.parse_args(["applications", "sync", "--fixture", "apps.json"])
+    fixture = parser.parse_args(["applications", "sync", "--fixture", "apps.json"])
+    live = parser.parse_args(["applications", "sync"])
 
-    assert args.command == "applications"
-    assert args.applications_command == "sync"
-    assert str(args.fixture) == "apps.json"
+    assert fixture.command == "applications"
+    assert fixture.applications_command == "sync"
+    assert str(fixture.fixture) == "apps.json"
+    assert live.fixture is None
 
 
 def test_cli_exposes_read_only_metrics_sync() -> None:
     parser = build_parser()
-    args = parser.parse_args(["metrics", "sync", "--fixture", "metrics.json"])
+    fixture = parser.parse_args(["metrics", "sync", "--fixture", "metrics.json"])
+    live = parser.parse_args(["metrics", "sync"])
 
-    assert args.command == "metrics"
-    assert args.metrics_command == "sync"
-    assert str(args.fixture) == "metrics.json"
+    assert fixture.command == "metrics"
+    assert fixture.metrics_command == "sync"
+    assert str(fixture.fixture) == "metrics.json"
+    assert live.fixture is None
 
 
 def test_cli_exposes_apply_dry_run() -> None:

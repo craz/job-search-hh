@@ -90,7 +90,11 @@ def normalize_application(item: dict[str, Any], *, vacancy_id: str) -> dict[str,
     applied_at = _text(item.get("created_at") or item.get("applied_at"))
     if applied_at:
         payload["applied_at"] = applied_at
-    state = _text(item.get("state") or item.get("result")).casefold()
+    state_raw = item.get("state") if "state" in item else item.get("result")
+    if isinstance(state_raw, dict):
+        state = _text(state_raw.get("id")).casefold()
+    else:
+        state = _text(state_raw).casefold()
     if state in _RESULT_MAP:
         payload["result"] = _RESULT_MAP[state]
     return payload

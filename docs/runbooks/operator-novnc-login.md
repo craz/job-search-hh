@@ -26,6 +26,14 @@ docker compose exec -T hh python -m job_search_hh.cli auth status
 
 Expected: `auth_session=present`, `login_ready=true`.
 
+6. For live authenticated API reads, place a user OAuth access token in the HH
+   state volume (never commit it) or set `JOB_SEARCH_HH_ACCESS_TOKEN`, then:
+
+```bash
+docker compose exec -T hh python -m job_search_hh.cli applications sync
+docker compose exec -T hh python -m job_search_hh.cli metrics sync
+```
+
 Clear the marker without wiping the profile volume:
 
 ```bash

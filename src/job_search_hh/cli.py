@@ -13,7 +13,8 @@ from job_search_hh.apply import ApplyError, dry_run_apply, limited_apply, load_a
 from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
-from job_search_hh.providers import FixtureProvider, HttpHhApi
+from job_search_hh.live_auth import LiveAuthError, require_authenticated_read
+from job_search_hh.providers import AuthenticatedHhApi, FixtureProvider, HttpHhApi
 from job_search_hh.session import (
     SessionError,
     auth_status,
@@ -55,25 +56,25 @@ def build_parser() -> argparse.ArgumentParser:
     applications = sub.add_parser("applications", help="Read-only application operations")
     applications_sub = applications.add_subparsers(dest="applications_command", required=True)
     app_sync = applications_sub.add_parser(
-        "sync", help="Import existing HH applications into Core from a fixture"
+        "sync",
+        help="Import HH applications into Core (fixture or authenticated GET /negotiations)",
     )
     app_sync.add_argument(
         "--fixture",
         type=Path,
-        required=True,
-        help="Synthetic negotiations/applications JSON (live auth API is out of scope)",
+        help="Synthetic negotiations JSON; omit for live authenticated GET (no HH write)",
     )
 
     metrics = sub.add_parser("metrics", help="Read-only daily metric operations")
     metrics_sub = metrics.add_subparsers(dest="metrics_command", required=True)
     metric_sync = metrics_sub.add_parser(
-        "sync", help="Import daily metric snapshots into Core from a fixture"
+        "sync",
+        help="Import daily metrics into Core (fixture or derived from authenticated negotiations)",
     )
     metric_sync.add_argument(
         "--fixture",
         type=Path,
-        required=True,
-        help="Synthetic daily metrics JSON (live HH stats API is out of scope)",
+        help="Synthetic daily metrics JSON; omit for live derived snapshot (no HH write)",
     )
 
     apply = sub.add_parser("apply", help="Guarded application operations")
@@ -166,26 +167,50 @@ def vacancy_sync_envelope(args: argparse.Namespace) -> Envelope:
 
 
 def application_sync_envelope(args: argparse.Namespace) -> Envelope:
-    """Import fixture applications without contacting authenticated HH write APIs."""
+    """Import applications via fixture or authenticated GET; never POST to HH."""
     settings = Settings.from_env()
-    provider = FixtureProvider.from_path(args.fixture)
-    core = CoreClient(settings.core_url, settings.timeout_seconds)
     try:
+        if args.fixture is not None:
+            provider: FixtureProvider | AuthenticatedHhApi = FixtureProvider.from_path(args.fixture)
+            transport = "fixture"
+        else:
+            token = require_authenticated_read()
+            provider = AuthenticatedHhApi(
+                settings.hh_api_url,
+                settings.user_agent,
+                settings.timeout_seconds,
+                token,
+            )
+            transport = "authenticated_api"
+        core = CoreClient(settings.core_url, settings.timeout_seconds)
         report = sync_applications(provider, core)
-    except SyncError as error:
+    except (LiveAuthError, SyncError) as error:
         return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    report["transport"] = transport
     return Envelope(schema_version=1, ok=True, data=report)
 
 
 def metric_sync_envelope(args: argparse.Namespace) -> Envelope:
-    """Import fixture daily metrics without contacting authenticated HH stats APIs."""
+    """Import metrics via fixture or authenticated derived snapshot; never write HH."""
     settings = Settings.from_env()
-    provider = FixtureProvider.from_path(args.fixture)
-    core = CoreClient(settings.core_url, settings.timeout_seconds)
     try:
+        if args.fixture is not None:
+            provider: FixtureProvider | AuthenticatedHhApi = FixtureProvider.from_path(args.fixture)
+            transport = "fixture"
+        else:
+            token = require_authenticated_read()
+            provider = AuthenticatedHhApi(
+                settings.hh_api_url,
+                settings.user_agent,
+                settings.timeout_seconds,
+                token,
+            )
+            transport = "authenticated_api"
+        core = CoreClient(settings.core_url, settings.timeout_seconds)
         report = sync_metrics(provider, core)
-    except SyncError as error:
+    except (LiveAuthError, SyncError) as error:
         return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    report["transport"] = transport
     return Envelope(schema_version=1, ok=True, data=report)
 
 
