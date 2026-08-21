@@ -11,10 +11,11 @@
     Тогда команда отказывает с external_writes_disabled
     И limited apply не пытался писать в HH
 
-  Сценарий: С двойным разрешением live write всё ещё не реализован
+  Сценарий: С двойным разрешением fake live transport отправляет один POST
     Дано есть план limited apply на вакансию hh
     И внешние записи HH включены
     И оператор передал явный флаг авторизации записи
-    Когда оператор запускает apply limited с лимитом один
-    Тогда ответ mode limited и execution not_implemented
-    И limited apply не пытался писать в HH
+    Когда оператор запускает apply limited через recording transport
+    Тогда ответ mode limited и execution completed
+    И limited apply отметил hh_write_attempted
+    И captcha_stop политика включена

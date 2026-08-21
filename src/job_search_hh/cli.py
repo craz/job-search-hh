@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from job_search_hh.apply import ApplyError, dry_run_apply, limited_apply, load_apply_plan
+from job_search_hh.apply_transport import HttpApplyTransport
 from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
@@ -98,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     limited = apply_sub.add_parser(
         "limited",
-        help="Gated limited apply scaffold (requires env+flag; live POST not implemented)",
+        help="Dual-gated limited apply (env+flag); POSTs /negotiations only when both pass",
     )
     limited.add_argument("--fixture", type=Path, required=True, help="Synthetic apply plan JSON")
     limited.add_argument(
@@ -281,19 +282,44 @@ def apply_dry_run_envelope(args: argparse.Namespace) -> Envelope:
 
 
 def apply_limited_envelope(args: argparse.Namespace) -> Envelope:
-    """Refuse unless dual-authorized; still do not POST to HH in this scaffold."""
+    """Dual-gate limited apply; live POST only after env+flag and login_ready+token."""
     settings = Settings.from_env()
     limit = args.limit if args.limit is not None else settings.apply_limit_per_run
+    authorized = bool(args.i_authorize_hh_writes)
+    transport = None
+    if settings.external_writes_enabled and authorized:
+        try:
+            token = require_authenticated_read()
+        except LiveAuthError as error:
+            return Envelope(
+                schema_version=1,
+                ok=False,
+                data={
+                    "mode": "limited",
+                    "execution": "refused",
+                    "error": str(error),
+                    "hh_write_attempted": False,
+                    "external_writes_enabled": True,
+                    "authorized": True,
+                },
+            )
+        transport = HttpApplyTransport(
+            settings.hh_api_url,
+            settings.user_agent,
+            settings.timeout_seconds,
+            token,
+        )
     try:
         report = limited_apply(
             load_apply_plan(args.fixture),
             external_writes_enabled=settings.external_writes_enabled,
-            authorized=bool(args.i_authorize_hh_writes),
+            authorized=authorized,
             limit=limit,
+            transport=transport,
         )
     except ApplyError as error:
         return Envelope(schema_version=1, ok=False, data={"error": str(error)})
-    ok = report["execution"] == "not_implemented" and report["hh_write_attempted"] is False
+    ok = report["execution"] == "completed" and not report["errors"]
     return Envelope(schema_version=1, ok=ok, data=report)
 
 

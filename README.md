@@ -14,6 +14,8 @@ accept a fixture or, without `--fixture`, an authenticated GET `/negotiations`
 Public HH search writes vacancies through `POST /api/v1/vacancies`; applications
 and metrics write only to Core.
 Capabilities report `hh_api=read-only` and `external_writes_enabled=false`.
+`apply limited` can POST `/negotiations` only when env writes are enabled, the
+CLI flag is set, and login_ready+token are present; Compose keeps writes off.
 Browser automation becomes `installed` inside the HH image (Chromium/Playwright/
 noVNC). Operator login uses loopback noVNC plus `auth open-login` /
 `auth confirm --i-confirm-operator-login`; cookies stay in the profile volume and

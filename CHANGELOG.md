@@ -11,8 +11,8 @@ Semantic Versioning.
 - Fixture-based HH application sync into Core (`applications sync --fixture`).
 - Fixture-based daily metrics sync into Core (`metrics sync --fixture`).
 - Apply dry-run CLI that audits `would_send` without HH submit or Core writes.
-- Gated limited-apply scaffold (`apply limited`) requiring env writes enable plus
-  `--i-authorize-hh-writes`; live HH POST remains not implemented.
+- Gated limited apply live transport: dual-gate + login_ready/token → POST
+  `/negotiations`; CAPTCHA/auth responses stop the run; default env keeps writes off.
 - Browser/auth runtime: Playwright Chromium + noVNC in the HH image, Compose
   loopback publish, `session status` reports `installed` when binaries are present.
 - Operator login: `auth open-login` / `auth confirm --i-confirm-operator-login` /

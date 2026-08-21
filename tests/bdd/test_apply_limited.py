@@ -8,6 +8,7 @@ from typing import Any
 from pytest_bdd import given, scenarios, then, when
 
 from job_search_hh.apply import limited_apply, load_apply_plan
+from job_search_hh.apply_transport import RecordingLiveApplyTransport
 
 scenarios("../features/apply_limited.feature")
 
@@ -46,14 +47,15 @@ def run_limited_unauthorized(
         external_writes_enabled=writes_enabled,
         authorized=False,
         limit=1,
+        transport=RecordingLiveApplyTransport(),
     )
 
 
 @when(
-    "оператор запускает apply limited с лимитом один",
+    "оператор запускает apply limited через recording transport",
     target_fixture="limited_result",
 )
-def run_limited_authorized(
+def run_limited_with_recording(
     limited_plan: list[dict[str, Any]], writes_enabled: bool, authorized: bool
 ) -> dict[str, Any]:
     return limited_apply(
@@ -61,6 +63,7 @@ def run_limited_authorized(
         external_writes_enabled=writes_enabled,
         authorized=authorized,
         limit=1,
+        transport=RecordingLiveApplyTransport(),
     )
 
 
@@ -75,9 +78,18 @@ def no_hh_write(limited_result: dict[str, Any]) -> None:
     assert limited_result["hh_write_attempted"] is False
 
 
-@then("ответ mode limited и execution not_implemented")
-def gated_ready_not_implemented(limited_result: dict[str, Any]) -> None:
+@then("ответ mode limited и execution completed")
+def completed_limited(limited_result: dict[str, Any]) -> None:
     assert limited_result["mode"] == "limited"
-    assert limited_result["execution"] == "not_implemented"
-    assert limited_result["items"][0]["status"] == "gated_ready"
+    assert limited_result["execution"] == "completed"
+    assert limited_result["items"][0]["status"] == "submitted"
+
+
+@then("limited apply отметил hh_write_attempted")
+def write_attempted(limited_result: dict[str, Any]) -> None:
+    assert limited_result["hh_write_attempted"] is True
+
+
+@then("captcha_stop политика включена")
+def captcha_policy(limited_result: dict[str, Any]) -> None:
     assert limited_result["captcha_stop"] is True

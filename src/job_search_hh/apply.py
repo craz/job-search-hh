@@ -1,4 +1,4 @@
-"""Dry-run and gated limited apply without accidental HH submits."""
+"""Dry-run and gated limited apply with optional live HH POST transport."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from job_search_hh.apply_transport import ApplyTransport, ApplyTransportError, FakeApplyTransport
+
+_CAPTCHA_STOP_ERRORS = frozenset({"captcha_or_auth_stop", "captcha_required"})
 
 
 class ApplyError(Exception):
@@ -102,8 +104,9 @@ def limited_apply(
     external_writes_enabled: bool,
     authorized: bool,
     limit: int = 1,
+    transport: ApplyTransport | None = None,
 ) -> dict[str, Any]:
-    """Gate limited apply; never open HH write HTTP in this scaffold."""
+    """Gate limited apply; live POST only through an injected dual-authorized transport."""
     limit = max(1, limit)
     base: dict[str, Any] = {
         "mode": "limited",
@@ -128,27 +131,53 @@ def limited_apply(
             **base,
             "errors": [{"error": "authorization_required"}],
         }
+    if transport is None:
+        return {
+            **base,
+            "errors": [{"error": "transport_required"}],
+        }
 
     selected = plan[:limit]
-    items = [
-        {
-            "vacancy_external_id": str(
-                item.get("vacancy_id") or item.get("vacancy_external_id") or ""
-            ),
-            "status": "gated_ready",
-            "would_send": {
-                "method": "POST",
-                "path": "/negotiations",
-                "body_keys": ["message", "resume_id", "vacancy_id"],
-            },
-        }
-        for item in selected
-        if isinstance(item, dict)
-    ]
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    write_attempted = False
+    execution = "completed"
+
+    for raw in selected:
+        if not isinstance(raw, dict):
+            continue
+        vacancy_external_id = str(raw.get("vacancy_id") or raw.get("vacancy_external_id") or "")
+        try:
+            intent = _normalize_intent(raw, live=True)
+            result = transport.submit(intent)
+            write_attempted = True
+            would_send = result.get("would_send")
+            items.append(
+                {
+                    "vacancy_external_id": intent["vacancy_external_id"],
+                    "status": str(result.get("status") or "submitted"),
+                    "negotiation_id": result.get("negotiation_id"),
+                    "would_send": would_send if isinstance(would_send, dict) else None,
+                }
+            )
+        except (ApplyError, ApplyTransportError) as error:
+            write_attempted = write_attempted or isinstance(error, ApplyTransportError)
+            code = str(error)
+            errors.append({"vacancy_external_id": vacancy_external_id, "error": code})
+            if code in _CAPTCHA_STOP_ERRORS:
+                execution = "stopped_captcha"
+                break
+            execution = "failed"
+
+    if hasattr(transport, "write_attempted"):
+        write_attempted = write_attempted or bool(transport.write_attempted)
+
     return {
         **base,
-        "selected": len(items),
+        "selected": len(selected),
+        "submitted": len(items),
         "items": items,
-        "execution": "not_implemented",
-        "errors": [],
+        "errors": errors,
+        "hh_write_attempted": write_attempted,
+        "execution": execution if items or errors else "completed",
     }
