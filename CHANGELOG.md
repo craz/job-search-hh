@@ -15,8 +15,10 @@ Semantic Versioning.
   `--i-authorize-hh-writes`; live HH POST remains not implemented.
 - Browser/auth runtime: Playwright Chromium + noVNC in the HH image, Compose
   loopback publish, `session status` reports `installed` when binaries are present.
+- Operator login: `auth open-login` / `auth confirm --i-confirm-operator-login` /
+  `auth clear`; `login_ready` only after explicit confirm; no CAPTCHA bypass.
 - Browser/auth scaffold CLI (`session`/`auth status`) and profile lock remain the
-  operator-facing diagnostics; login_ready stays false until a login slice.
+  operator-facing diagnostics until login is confirmed.
 - Normalization to Core VacancyCreate/ApplicationCreate/DailyMetricUpdate with
   stable `source=hh` and idempotent keys.
 - Capabilities report `hh_api=read-only` while keeping `external_writes_enabled=false`.

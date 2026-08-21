@@ -14,9 +14,10 @@ through `POST /api/v1/applications`; daily snapshots write through
 `PUT /api/v1/metrics/{date}` with fingerprint idempotency keys.
 Capabilities report `hh_api=read-only` and `external_writes_enabled=false`.
 Browser automation becomes `installed` inside the HH image (Chromium/Playwright/
-noVNC); `auth status` stays not login-ready until an operator completes login.
-Compose publishes noVNC only on loopback. Live OAuth automation and chats are
-not implemented.
+noVNC). Operator login uses loopback noVNC plus `auth open-login` /
+`auth confirm --i-confirm-operator-login`; cookies stay in the profile volume and
+are never printed. Live OAuth automation, CAPTCHA bypass and chats are not
+implemented.
 
 ## Quick start
 
@@ -35,6 +36,8 @@ uv run job-search-hh apply dry-run --fixture path/to/apply_plan.json
 uv run job-search-hh apply limited --fixture path/to/apply_plan.json --i-authorize-hh-writes
 uv run job-search-hh session status
 uv run job-search-hh auth status
+uv run job-search-hh auth open-login --detach
+uv run job-search-hh auth confirm --i-confirm-operator-login
 ```
 
 Offline vacancy fixture sync:
@@ -44,7 +47,8 @@ CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh vacancies sync --fixture
 ```
 
 Manual virtualenv activation is not required. `make bootstrap` uses the checked-in
-lock and `.venv`; it never installs Playwright browsers in this slice.
+lock; Playwright browsers for the HH image are installed in Docker, not by host
+`make bootstrap`.
 
 ## Safety boundary
 
@@ -60,6 +64,8 @@ See [vacancy sync](docs/specs/vacancy-sync.md),
 [apply dry-run](docs/specs/apply-dry-run.md),
 [apply limited](docs/specs/apply-limited.md),
 [browser/auth scaffold](docs/specs/browser-auth-scaffold.md),
+[operator noVNC login](docs/specs/operator-novnc-login.md),
+[operator login runbook](docs/runbooks/operator-novnc-login.md),
 [safe scaffold](docs/specs/safe-scaffold.md) and executable Gherkin under
 `tests/features/`.
 

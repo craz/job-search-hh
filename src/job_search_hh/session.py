@@ -1,13 +1,23 @@
-"""Persistent HH state/profile paths, browser detection and profile lock."""
+"""Persistent HH state/profile paths, browser detection and operator auth markers."""
 
 from __future__ import annotations
 
 import json
 import os
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from job_search_hh.browser import (
+    DEFAULT_LOGIN_URL,
+    BrowserError,
+    BrowserLauncher,
+    PlaywrightBrowserLauncher,
+)
 
 
 class SessionError(Exception):
@@ -19,6 +29,10 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 @dataclass(frozen=True)
@@ -39,6 +53,10 @@ class SessionPaths:
     def ensure(self) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.profile_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def session_marker(self) -> Path:
+        return self.state_dir / "session.json"
 
 
 class ProfileLock:
@@ -91,10 +109,37 @@ def novnc_configured() -> bool:
 
 
 def browser_automation_level() -> str:
-    """Return scaffold until Chromium+noVNC are present; never claim login-ready."""
+    """Return scaffold until Chromium+noVNC are present; never claim write-ready."""
     if chromium_installed() and novnc_configured():
         return "installed"
     return "scaffold"
+
+
+def read_auth_session(paths: SessionPaths) -> str:
+    """Read the operator-facing session marker without dumping cookies or tokens."""
+    marker = paths.session_marker
+    if not marker.exists():
+        return "absent"
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+        status = str(payload.get("status") or "").strip()
+        return status or "invalid"
+    except (OSError, ValueError):
+        return "invalid"
+
+
+def write_auth_session(paths: SessionPaths, status: str, *, source: str) -> None:
+    """Persist a non-secret session marker under the HH state volume."""
+    paths.ensure()
+    payload = {
+        "status": status,
+        "source": source,
+        "updated_at": _utc_now(),
+    }
+    paths.session_marker.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def session_status(paths: SessionPaths | None = None) -> dict[str, Any]:
@@ -102,16 +147,7 @@ def session_status(paths: SessionPaths | None = None) -> dict[str, Any]:
     resolved = paths or SessionPaths.from_env()
     resolved.ensure()
     lock = ProfileLock(resolved.profile_dir)
-    session_marker = resolved.state_dir / "session.json"
-    auth_session = "absent"
-    if session_marker.exists():
-        try:
-            payload = json.loads(session_marker.read_text(encoding="utf-8"))
-            status = str(payload.get("status") or "").strip()
-            if status:
-                auth_session = status
-        except (OSError, ValueError):
-            auth_session = "invalid"
+    auth_session = read_auth_session(resolved)
     level = browser_automation_level()
     return {
         "browser_automation": level,
@@ -128,11 +164,102 @@ def session_status(paths: SessionPaths | None = None) -> dict[str, Any]:
 
 
 def auth_status(paths: SessionPaths | None = None) -> dict[str, Any]:
-    """Return auth session marker without performing HH login."""
+    """Return auth session marker; login_ready only after operator confirm."""
     status = session_status(paths)
+    ready = status["auth_session"] == "present" and bool(status["chromium_installed"])
     return {
         "auth_session": status["auth_session"],
-        "login_ready": False,
+        "login_ready": ready,
         "novnc_configured": status["novnc_configured"],
         "browser_automation": status["browser_automation"],
+        "novnc_port": status["novnc_port"],
     }
+
+
+def open_login(
+    paths: SessionPaths | None = None,
+    *,
+    login_url: str = DEFAULT_LOGIN_URL,
+    detach: bool = False,
+    launcher: BrowserLauncher | None = None,
+) -> dict[str, Any]:
+    """Open HH login in headed Chromium for noVNC; never solves CAPTCHA."""
+    resolved = paths or SessionPaths.from_env()
+    resolved.ensure()
+    if not chromium_installed():
+        raise SessionError("chromium_missing")
+    novnc_port = int(os.getenv("HH_NOVNC_PORT", "6080"))
+    report: dict[str, Any] = {
+        "auth_session": "pending_operator",
+        "browser_started": False,
+        "detached": detach,
+        "login_url": login_url,
+        "novnc_url": f"http://127.0.0.1:{novnc_port}/",
+        "profile_lock": ProfileLock(resolved.profile_dir).status(),
+        "captcha_bypass": False,
+    }
+    if detach:
+        write_auth_session(resolved, "pending_operator", source="auth_open_login")
+        # Child takes the profile lock in foreground mode.
+        child = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            [
+                sys.executable,
+                "-m",
+                "job_search_hh.cli",
+                "auth",
+                "open-login",
+                "--foreground",
+                "--login-url",
+                login_url,
+            ],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={
+                **os.environ,
+                "HH_STATE_DIR": str(resolved.state_dir),
+                "HH_PROFILE_DIR": str(resolved.profile_dir),
+            },
+        )
+        (resolved.state_dir / "login-browser.pid").write_text(str(child.pid), encoding="utf-8")
+        report["browser_started"] = True
+        report["pid"] = child.pid
+        return report
+
+    lock = ProfileLock(resolved.profile_dir)
+    lock.acquire("auth-open-login")
+    write_auth_session(resolved, "pending_operator", source="auth_open_login")
+    report["profile_lock"] = "locked"
+    active = launcher or PlaywrightBrowserLauncher()
+    try:
+        active.open_login_page(profile_dir=resolved.profile_dir, login_url=login_url)
+        report["browser_started"] = True
+    except BrowserError as error:
+        raise SessionError(str(error)) from error
+    finally:
+        lock.release()
+        report["profile_lock"] = lock.status()
+    return report
+
+
+def confirm_login(
+    paths: SessionPaths | None = None,
+    *,
+    confirmed: bool,
+) -> dict[str, Any]:
+    """Record operator confirmation that interactive HH login succeeded."""
+    if not confirmed:
+        raise SessionError("confirmation_required")
+    resolved = paths or SessionPaths.from_env()
+    resolved.ensure()
+    write_auth_session(resolved, "present", source="operator_confirm")
+    return auth_status(resolved)
+
+
+def clear_login(paths: SessionPaths | None = None) -> dict[str, Any]:
+    """Remove the session marker without deleting the Chromium profile."""
+    resolved = paths or SessionPaths.from_env()
+    resolved.ensure()
+    if resolved.session_marker.exists():
+        resolved.session_marker.unlink()
+    return auth_status(resolved)

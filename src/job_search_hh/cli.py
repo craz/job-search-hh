@@ -14,7 +14,14 @@ from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
 from job_search_hh.providers import FixtureProvider, HttpHhApi
-from job_search_hh.session import auth_status, session_status
+from job_search_hh.session import (
+    SessionError,
+    auth_status,
+    clear_login,
+    confirm_login,
+    open_login,
+    session_status,
+)
 from job_search_hh.sync import SyncError, sync_applications, sync_metrics, sync_vacancies
 
 
@@ -101,9 +108,38 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="Report profile/state scaffold without launching Chromium"
     )
 
-    auth = sub.add_parser("auth", help="Authentication scaffold diagnostics")
+    auth = sub.add_parser("auth", help="Operator authentication via noVNC")
     auth_sub = auth.add_subparsers(dest="auth_command", required=True)
     auth_sub.add_parser("status", help="Report auth session marker without HH login")
+    open_login_cmd = auth_sub.add_parser(
+        "open-login",
+        help="Open HH login in headed Chromium for loopback noVNC (no CAPTCHA bypass)",
+    )
+    open_login_cmd.add_argument(
+        "--login-url",
+        default="https://hh.ru/account/login",
+        help="HH login page opened in the persistent profile",
+    )
+    open_login_cmd.add_argument(
+        "--detach",
+        action="store_true",
+        help="Start browser in a background process and return immediately",
+    )
+    open_login_cmd.add_argument(
+        "--foreground",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    confirm = auth_sub.add_parser(
+        "confirm",
+        help="Record operator confirmation that interactive HH login succeeded",
+    )
+    confirm.add_argument(
+        "--i-confirm-operator-login",
+        action="store_true",
+        help="Required explicit confirmation; does not capture cookies into JSON",
+    )
+    auth_sub.add_parser("clear", help="Clear session marker without deleting the profile")
     return parser
 
 
@@ -190,6 +226,32 @@ def auth_status_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=auth_status())
 
 
+def auth_open_login_envelope(args: argparse.Namespace) -> Envelope:
+    """Open headed login for noVNC or refuse with a stable session error."""
+    try:
+        report = open_login(
+            login_url=str(args.login_url),
+            detach=bool(args.detach) and not bool(args.foreground),
+        )
+    except SessionError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    return Envelope(schema_version=1, ok=True, data=report)
+
+
+def auth_confirm_envelope(args: argparse.Namespace) -> Envelope:
+    """Persist present marker only after explicit operator confirmation."""
+    try:
+        report = confirm_login(confirmed=bool(args.i_confirm_operator_login))
+    except SessionError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    return Envelope(schema_version=1, ok=True, data=report)
+
+
+def auth_clear_envelope() -> Envelope:
+    """Drop the session marker while keeping the Chromium profile volume."""
+    return Envelope(schema_version=1, ok=True, data=clear_login())
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print exactly one JSON envelope and return a process-compatible status."""
     args = build_parser().parse_args(argv)
@@ -209,6 +271,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = session_status_envelope()
     elif args.command == "auth" and args.auth_command == "status":
         envelope = auth_status_envelope()
+    elif args.command == "auth" and args.auth_command == "open-login":
+        envelope = auth_open_login_envelope(args)
+    elif args.command == "auth" and args.auth_command == "confirm":
+        envelope = auth_confirm_envelope(args)
+    elif args.command == "auth" and args.auth_command == "clear":
+        envelope = auth_clear_envelope()
     else:  # pragma: no cover - argparse enforces choices
         return 2
     print(json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True))

@@ -73,3 +73,14 @@ def test_cli_exposes_session_and_auth_status() -> None:
 
     assert session.command == "session" and session.session_command == "status"
     assert auth.command == "auth" and auth.auth_command == "status"
+
+
+def test_cli_exposes_auth_open_confirm_clear() -> None:
+    parser = build_parser()
+    opened = parser.parse_args(["auth", "open-login", "--detach"])
+    confirmed = parser.parse_args(["auth", "confirm", "--i-confirm-operator-login"])
+    cleared = parser.parse_args(["auth", "clear"])
+
+    assert opened.auth_command == "open-login" and opened.detach is True
+    assert confirmed.i_confirm_operator_login is True
+    assert cleared.auth_command == "clear"

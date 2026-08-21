@@ -15,10 +15,10 @@
 - Compose publishes noVNC only on `127.0.0.1:6080`;
 - volumes `hh-profile` / `hh-state` remain HH-owned;
 - `session status` reports `browser_automation=installed` when Chromium+noVNC
-  are present; `auth status` stays `login_ready=false` until a login slice;
-- capabilities never enable `external_writes_enabled`.
+  are present;
+- operator login commands live in [operator-novnc-login.md](operator-novnc-login.md).
 
 ## Non-scope
 
-Automated HH login, OAuth token capture, CAPTCHA handling, live apply POST and
-exposing noVNC beyond loopback.
+Automated credential entry, CAPTCHA solving, live apply POST and exposing noVNC
+beyond loopback.
