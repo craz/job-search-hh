@@ -11,7 +11,8 @@ Read-only vacancy sync is implemented. Applications and daily metrics sync
 accept a fixture or, without `--fixture`, an authenticated GET `/negotiations`
 (requires `login_ready` plus access token). Live metrics also read
 `GET /resumes/mine` for `views_total`/`views_new` when the app scope allows it.
-`POST /api/v1/vacancies`; applications and metrics write only to Core.
+Public HH search writes vacancies through `POST /api/v1/vacancies`; applications
+and metrics write only to Core.
 Capabilities report `hh_api=read-only` and `external_writes_enabled=false`.
 Browser automation becomes `installed` inside the HH image (Chromium/Playwright/
 noVNC). Operator login uses loopback noVNC plus `auth open-login` /
