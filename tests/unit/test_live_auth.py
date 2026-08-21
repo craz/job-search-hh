@@ -44,7 +44,7 @@ def test_require_authenticated_read_needs_token(
 
 
 def test_authenticated_api_lists_negotiations(monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = {
+    negotiations = {
         "items": [
             {
                 "id": "n1",
@@ -56,12 +56,20 @@ def test_authenticated_api_lists_negotiations(monkeypatch: pytest.MonkeyPatch) -
         "page": 0,
         "pages": 1,
     }
+    resumes = {
+        "items": [
+            {"id": "r1", "title": "Backend", "views_count": 42, "new_views_count": 3},
+            {"id": "r2", "title": "DevOps", "views_count": 8, "new_views_count": 1},
+        ]
+    }
 
     def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:  # noqa: ARG001
         assert request.get_method() == "GET"
-        assert "Authorization" in request.headers or request.get_header("Authorization")
-        assert "/negotiations" in request.full_url
-        return _FakeResponse(json.dumps(payload).encode("utf-8"))
+        url = request.full_url
+        if "/resumes/mine" in url:
+            return _FakeResponse(json.dumps(resumes).encode("utf-8"))
+        assert "/negotiations" in url
+        return _FakeResponse(json.dumps(negotiations).encode("utf-8"))
 
     monkeypatch.setattr("job_search_hh.providers.urllib.request.urlopen", fake_urlopen)
     api = AuthenticatedHhApi("https://api.hh.ru", "ua", 5.0, "secret-token")
@@ -71,7 +79,29 @@ def test_authenticated_api_lists_negotiations(monkeypatch: pytest.MonkeyPatch) -
     metrics = api.list_metrics()
     assert metrics[0]["applications"] == 1
     assert metrics[0]["replies"] == 1
+    assert metrics[0]["views_total"] == 50
+    assert metrics[0]["views_new"] == 4
+    assert metrics[0]["notes"] == "negotiations_get+resumes_mine"
     assert "secret-token" not in json.dumps(metrics)
+
+
+def test_metrics_tolerate_resumes_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    negotiations = {
+        "items": [{"id": "n1", "state": {"id": "response"}, "vacancy": {"id": "1"}}],
+        "page": 0,
+        "pages": 1,
+    }
+
+    def fake_urlopen(request: Any, timeout: float = 0) -> Any:  # noqa: ARG001
+        if "/resumes/mine" in request.full_url:
+            raise HTTPError(request.full_url, 403, "Forbidden", hdrs=None, fp=None)  # type: ignore[arg-type]
+        return _FakeResponse(json.dumps(negotiations).encode("utf-8"))
+
+    monkeypatch.setattr("job_search_hh.providers.urllib.request.urlopen", fake_urlopen)
+    api = AuthenticatedHhApi("https://api.hh.ru", "ua", 5.0, "secret-token")
+    metrics = api.list_metrics()
+    assert "views_total" not in metrics[0]
+    assert metrics[0]["notes"] == "negotiations_get+resumes_mine_forbidden"
 
 
 def test_authenticated_api_rejects_http_error(monkeypatch: pytest.MonkeyPatch) -> None:

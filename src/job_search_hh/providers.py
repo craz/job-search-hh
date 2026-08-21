@@ -101,6 +101,42 @@ def _flatten_negotiation(item: dict[str, Any]) -> dict[str, Any]:
     return flat
 
 
+def _as_nonneg_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        number = int(value)
+        return number if number >= 0 and float(number) == value else None
+    if isinstance(value, str):
+        try:
+            number = int(value.strip())
+        except ValueError:
+            return None
+        return number if number >= 0 else None
+    return None
+
+
+def _resume_views_from_item(item: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Extract total/new view counters from one /resumes/mine item."""
+    total = _as_nonneg_int(
+        item.get("views_count") if item.get("views_count") is not None else item.get("total_views")
+    )
+    new = _as_nonneg_int(
+        item.get("new_views_count")
+        if item.get("new_views_count") is not None
+        else item.get("views_new")
+    )
+    counters = item.get("counters")
+    if isinstance(counters, dict):
+        if total is None:
+            total = _as_nonneg_int(counters.get("views") or counters.get("views_total"))
+        if new is None:
+            new = _as_nonneg_int(counters.get("views_new") or counters.get("new_views"))
+    return total, new
+
+
 class AuthenticatedHhApi:
     """Bearer-authenticated HH GET client for negotiations; never POSTs to HH."""
 
@@ -207,8 +243,36 @@ class AuthenticatedHhApi:
             return items
         return self._paginate(url)
 
+    def list_resumes_mine(self) -> list[dict[str, Any]]:
+        """GET /resumes/mine for view counters; never mutates resumes."""
+        payload = self._get_json(f"{self.base_url}/resumes/mine")
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise ProviderError("invalid_hh_response")
+        return [item for item in items if isinstance(item, dict)]
+
+    def resume_view_totals(self) -> tuple[int | None, int | None, str]:
+        """Sum resume view counters; tolerate resume-scope 403 without failing sync."""
+        try:
+            resumes = self.list_resumes_mine()
+        except ProviderError as error:
+            if str(error) == "http_403":
+                return None, None, "resumes_mine_forbidden"
+            raise
+        totals: list[int] = []
+        news: list[int] = []
+        for item in resumes:
+            total, new = _resume_views_from_item(item)
+            if total is not None:
+                totals.append(total)
+            if new is not None:
+                news.append(new)
+        views_total = sum(totals) if totals else None
+        views_new = sum(news) if news else None
+        return views_total, views_new, "resumes_mine"
+
     def list_metrics(self) -> list[dict[str, Any]]:
-        """Derive one UTC daily snapshot from negotiations GET (no HH stats write)."""
+        """Build one UTC daily snapshot from negotiations + /resumes/mine views."""
         applications = self.list_applications()
         metric_date = datetime.now(UTC).date().isoformat()
         replies = sum(
@@ -220,13 +284,17 @@ class AuthenticatedHhApi:
         rejections = sum(
             1 for item in applications if _negotiation_state_id(item) in {"discard", "rejected"}
         )
-        return [
-            {
-                "metric_date": metric_date,
-                "applications": len(applications),
-                "replies": replies,
-                "invitations": invitations,
-                "rejections": rejections,
-                "notes": "derived_from_negotiations_get",
-            }
-        ]
+        views_total, views_new, views_source = self.resume_view_totals()
+        snapshot: dict[str, Any] = {
+            "metric_date": metric_date,
+            "applications": len(applications),
+            "replies": replies,
+            "invitations": invitations,
+            "rejections": rejections,
+            "notes": f"negotiations_get+{views_source}",
+        }
+        if views_total is not None:
+            snapshot["views_total"] = views_total
+        if views_new is not None:
+            snapshot["views_new"] = views_new
+        return [snapshot]

@@ -11,10 +11,10 @@
 ## Implemented
 
 - CLI `applications sync` without `--fixture` uses Bearer GET `/negotiations`;
-- CLI `metrics sync` without `--fixture` derives one UTC daily snapshot from the
-  same negotiations GET (`notes=derived_from_negotiations_get`);
+- CLI `metrics sync` without `--fixture` builds one UTC daily snapshot from
+  negotiations GET plus `/resumes/mine` view counters;
 - dual gate: `auth status` must be `login_ready` and access token must exist via
-  `JOB_SEARCH_HH_ACCESS_TOKEN` or `HH_STATE_DIR/access_token` (never printed);
+  `JOB_SEARCH_HH_ACCESS_TOKEN` or private token files (never printed);
 - reports include `transport=authenticated_api` and `hh_write_attempted=false`;
 - fixture path remains available offline.
 

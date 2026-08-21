@@ -9,8 +9,8 @@ workflows. It communicates with Core only through versioned public contracts.
 
 Read-only vacancy sync is implemented. Applications and daily metrics sync
 accept a fixture or, without `--fixture`, an authenticated GET `/negotiations`
-(requires `login_ready` plus `JOB_SEARCH_HH_ACCESS_TOKEN` / state `access_token`;
-metrics are derived from negotiations). Public HH search writes vacancies through
+(requires `login_ready` plus access token). Live metrics also read
+`GET /resumes/mine` for `views_total`/`views_new` when the app scope allows it.
 `POST /api/v1/vacancies`; applications and metrics write only to Core.
 Capabilities report `hh_api=read-only` and `external_writes_enabled=false`.
 Browser automation becomes `installed` inside the HH image (Chromium/Playwright/
@@ -75,6 +75,7 @@ See [vacancy sync](docs/specs/vacancy-sync.md),
 [browser/auth scaffold](docs/specs/browser-auth-scaffold.md),
 [operator noVNC login](docs/specs/operator-novnc-login.md),
 [live authenticated read](docs/specs/live-authenticated-read.md),
+[resume-views metrics](docs/specs/resume-views-metrics.md),
 [oauth token store](docs/specs/oauth-token-store.md),
 [oauth loopback callback](docs/specs/oauth-loopback-callback.md),
 [operator login runbook](docs/runbooks/operator-novnc-login.md),

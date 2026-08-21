@@ -18,8 +18,8 @@ Semantic Versioning.
 - Operator login: `auth open-login` / `auth confirm --i-confirm-operator-login` /
   `auth clear`; `login_ready` only after explicit confirm; no CAPTCHA bypass.
 - Live authenticated read: `applications|metrics sync` without `--fixture` uses
-  Bearer GET `/negotiations` (metrics derived); requires `login_ready` + token;
-  `hh_write_attempted=false`.
+  Bearer GET `/negotiations` plus `/resumes/mine` view counters for metrics;
+  requires `login_ready` + token; `hh_write_attempted=false`.
 - OAuth token store: `auth oauth-url` / `exchange-code` / `set-token` /
   `token-status` / `clear-token`; secrets stay in state files, not CLI JSON.
 - Loopback OAuth callback: `auth oauth-acquire` listens on `127.0.0.1` redirect
