@@ -1,4 +1,4 @@
-"""Dry-run apply planning without HH submit or Core Application writes."""
+"""Dry-run and gated limited apply without accidental HH submits."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from job_search_hh.apply_transport import ApplyTransport, ApplyTransportError, F
 
 
 class ApplyError(Exception):
-    """Stable failure for incomplete plans or unsafe dry-run execution."""
+    """Stable failure for incomplete plans or unsafe apply execution."""
 
 
 def load_apply_plan(path: Path) -> list[dict[str, Any]]:
@@ -22,7 +22,7 @@ def load_apply_plan(path: Path) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def _normalize_intent(item: dict[str, Any]) -> dict[str, Any]:
+def _normalize_intent(item: dict[str, Any], *, live: bool) -> dict[str, Any]:
     vacancy_id = str(item.get("vacancy_id") or item.get("vacancy_external_id") or "").strip()
     resume_id = str(item.get("resume_id") or "").strip()
     message = str(item.get("message") or item.get("cover_letter") or "")
@@ -39,7 +39,7 @@ def _normalize_intent(item: dict[str, Any]) -> dict[str, Any]:
         "message": message,
         "path": "/negotiations",
         "body": body,
-        "live": False,
+        "live": live,
     }
 
 
@@ -56,7 +56,7 @@ def dry_run_apply(
 
     for raw in plan:
         try:
-            intent = _normalize_intent(raw)
+            intent = _normalize_intent(raw, live=False)
             result = client.submit(intent)
             would_send = result.get("would_send")
             if not isinstance(would_send, dict):
@@ -93,4 +93,62 @@ def dry_run_apply(
         "external_writes_enabled": False,
         "hh_write_attempted": write_attempted,
         "core_application_created": False,
+    }
+
+
+def limited_apply(
+    plan: list[dict[str, Any]],
+    *,
+    external_writes_enabled: bool,
+    authorized: bool,
+    limit: int = 1,
+) -> dict[str, Any]:
+    """Gate limited apply; never open HH write HTTP in this scaffold."""
+    limit = max(1, limit)
+    base: dict[str, Any] = {
+        "mode": "limited",
+        "planned": len(plan),
+        "limit": limit,
+        "captcha_stop": True,
+        "items": [],
+        "errors": [],
+        "external_writes_enabled": external_writes_enabled,
+        "authorized": authorized,
+        "hh_write_attempted": False,
+        "core_application_created": False,
+        "execution": "refused",
+    }
+    if not external_writes_enabled:
+        return {
+            **base,
+            "errors": [{"error": "external_writes_disabled"}],
+        }
+    if not authorized:
+        return {
+            **base,
+            "errors": [{"error": "authorization_required"}],
+        }
+
+    selected = plan[:limit]
+    items = [
+        {
+            "vacancy_external_id": str(
+                item.get("vacancy_id") or item.get("vacancy_external_id") or ""
+            ),
+            "status": "gated_ready",
+            "would_send": {
+                "method": "POST",
+                "path": "/negotiations",
+                "body_keys": ["message", "resume_id", "vacancy_id"],
+            },
+        }
+        for item in selected
+        if isinstance(item, dict)
+    ]
+    return {
+        **base,
+        "selected": len(items),
+        "items": items,
+        "execution": "not_implemented",
+        "errors": [],
     }

@@ -13,8 +13,10 @@ are implemented. Public HH search (or a fixture) writes vacancies through
 through `POST /api/v1/applications`; daily snapshots write through
 `PUT /api/v1/metrics/{date}` with fingerprint idempotency keys.
 Capabilities report `hh_api=read-only` and `external_writes_enabled=false`.
-Apply dry-run simulates payloads without submitting. Browser automation, OAuth,
-live apply and chats are not implemented.
+Apply dry-run simulates payloads without submitting. Limited apply is a gated
+scaffold (`apply limited`) that refuses without env+flag authorization and still
+does not POST to HH. Browser automation, OAuth, live apply transport and chats
+are not implemented.
 
 ## Quick start
 
@@ -30,6 +32,7 @@ CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh vacancies sync --text "p
 CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh applications sync --fixture path/to/apps.json
 CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh metrics sync --fixture path/to/metrics.json
 uv run job-search-hh apply dry-run --fixture path/to/apply_plan.json
+uv run job-search-hh apply limited --fixture path/to/apply_plan.json --i-authorize-hh-writes
 ```
 
 Offline vacancy fixture sync:
@@ -53,6 +56,7 @@ See [vacancy sync](docs/specs/vacancy-sync.md),
 [application sync](docs/specs/application-sync.md),
 [metrics sync](docs/specs/metrics-sync.md),
 [apply dry-run](docs/specs/apply-dry-run.md),
+[apply limited](docs/specs/apply-limited.md),
 [safe scaffold](docs/specs/safe-scaffold.md) and executable Gherkin under
 `tests/features/`.
 

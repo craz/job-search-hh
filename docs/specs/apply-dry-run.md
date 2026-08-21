@@ -18,5 +18,6 @@
 
 ## Non-scope
 
-Live HH submit, limited apply, CAPTCHA handling, browser/Playwright/noVNC,
-OAuth and tick/autopilot remain out of this slice.
+Live HH submit over the network, CAPTCHA solving, browser/Playwright/noVNC,
+OAuth and tick/autopilot remain out of the dry-run slice. Gated limited apply
+scaffold lives in [apply-limited.md](apply-limited.md).

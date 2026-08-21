@@ -50,3 +50,15 @@ def test_cli_exposes_apply_dry_run() -> None:
     assert args.command == "apply"
     assert args.apply_command == "dry-run"
     assert str(args.fixture) == "plan.json"
+
+
+def test_cli_exposes_apply_limited_with_authorization_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["apply", "limited", "--fixture", "plan.json", "--limit", "1", "--i-authorize-hh-writes"]
+    )
+
+    assert args.command == "apply"
+    assert args.apply_command == "limited"
+    assert args.i_authorize_hh_writes is True
+    assert args.limit == 1

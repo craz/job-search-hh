@@ -11,6 +11,8 @@ Semantic Versioning.
 - Fixture-based HH application sync into Core (`applications sync --fixture`).
 - Fixture-based daily metrics sync into Core (`metrics sync --fixture`).
 - Apply dry-run CLI that audits `would_send` without HH submit or Core writes.
+- Gated limited-apply scaffold (`apply limited`) requiring env writes enable plus
+  `--i-authorize-hh-writes`; live HH POST remains not implemented.
 - Normalization to Core VacancyCreate/ApplicationCreate/DailyMetricUpdate with
   stable `source=hh` and idempotent keys.
 - Capabilities report `hh_api=read-only` while keeping `external_writes_enabled=false`.

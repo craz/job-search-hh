@@ -1,4 +1,4 @@
-"""Versioned JSON command-line interface for HH read-only Core sync and dry-run apply."""
+"""Versioned JSON command-line interface for HH sync, dry-run and gated limited apply."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from job_search_hh.apply import ApplyError, dry_run_apply, load_apply_plan
+from job_search_hh.apply import ApplyError, dry_run_apply, limited_apply, load_apply_plan
 from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
@@ -27,7 +27,7 @@ class Envelope:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Define capabilities, read-only sync and apply dry-run; live apply stays unavailable."""
+    """Define sync, dry-run and gated limited apply; live HH POST stays unimplemented."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -76,6 +76,22 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Synthetic apply plan JSON (never contacts HH write endpoints)",
+    )
+    limited = apply_sub.add_parser(
+        "limited",
+        help="Gated limited apply scaffold (requires env+flag; live POST not implemented)",
+    )
+    limited.add_argument("--fixture", type=Path, required=True, help="Synthetic apply plan JSON")
+    limited.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Max applications per run (default from JOB_SEARCH_HH_APPLY_LIMIT)",
+    )
+    limited.add_argument(
+        "--i-authorize-hh-writes",
+        action="store_true",
+        help="Explicit operator authorization required together with env writes enable",
     )
     return parser
 
@@ -136,6 +152,23 @@ def apply_dry_run_envelope(args: argparse.Namespace) -> Envelope:
     return Envelope(schema_version=1, ok=ok, data=report)
 
 
+def apply_limited_envelope(args: argparse.Namespace) -> Envelope:
+    """Refuse unless dual-authorized; still do not POST to HH in this scaffold."""
+    settings = Settings.from_env()
+    limit = args.limit if args.limit is not None else settings.apply_limit_per_run
+    try:
+        report = limited_apply(
+            load_apply_plan(args.fixture),
+            external_writes_enabled=settings.external_writes_enabled,
+            authorized=bool(args.i_authorize_hh_writes),
+            limit=limit,
+        )
+    except ApplyError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    ok = report["execution"] == "not_implemented" and report["hh_write_attempted"] is False
+    return Envelope(schema_version=1, ok=ok, data=report)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print exactly one JSON envelope and return a process-compatible status."""
     args = build_parser().parse_args(argv)
@@ -149,6 +182,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = metric_sync_envelope(args)
     elif args.command == "apply" and args.apply_command == "dry-run":
         envelope = apply_dry_run_envelope(args)
+    elif args.command == "apply" and args.apply_command == "limited":
+        envelope = apply_limited_envelope(args)
     else:  # pragma: no cover - argparse enforces choices
         return 2
     print(json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True))
