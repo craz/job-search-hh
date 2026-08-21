@@ -19,7 +19,7 @@ noVNC). Operator login uses loopback noVNC plus `auth open-login` /
 `auth confirm --i-confirm-operator-login`; cookies stay in the profile volume and
 are never printed. OAuth token storage (`auth oauth-url` / `exchange-code` /
 `set-token` / `token-status`) keeps secrets out of CLI JSON. Loopback OAuth
-callback (`auth oauth-acquire` on `127.0.0.1:8765`) is implemented. CAPTCHA
+callback (`auth oauth-acquire` on `127.0.0.1:8767`) is implemented. CAPTCHA
 bypass and chats are not implemented.
 
 ## Quick start
@@ -79,6 +79,7 @@ See [vacancy sync](docs/specs/vacancy-sync.md),
 [resume-views metrics](docs/specs/resume-views-metrics.md),
 [oauth token store](docs/specs/oauth-token-store.md),
 [oauth loopback callback](docs/specs/oauth-loopback-callback.md),
+[HH read gate](docs/runbooks/hh-read-gate.md),
 [operator login runbook](docs/runbooks/operator-novnc-login.md),
 [safe scaffold](docs/specs/safe-scaffold.md) and executable Gherkin under
 `tests/features/`.

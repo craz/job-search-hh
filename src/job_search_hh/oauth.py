@@ -43,7 +43,7 @@ class OAuthSettings:
             ).strip(),
             redirect_uri=os.getenv(
                 "JOB_SEARCH_HH_REDIRECT_URI",
-                os.getenv("HH_REDIRECT_URI", "http://127.0.0.1:8765/oauth/callback"),
+                os.getenv("HH_REDIRECT_URI", "http://127.0.0.1:8767/oauth/callback"),
             ).strip(),
             auth_host=os.getenv("JOB_SEARCH_HH_AUTH_HOST", AUTH_HOST).rstrip("/"),
             user_agent=os.getenv(

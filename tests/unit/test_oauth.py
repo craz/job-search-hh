@@ -32,7 +32,7 @@ class _FakeResponse(io.BytesIO):
 def test_build_authorize_url_omits_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JOB_SEARCH_HH_CLIENT_ID", "cid")
     monkeypatch.setenv("JOB_SEARCH_HH_CLIENT_SECRET", "csecret")
-    monkeypatch.setenv("JOB_SEARCH_HH_REDIRECT_URI", "http://127.0.0.1:8765/oauth/callback")
+    monkeypatch.setenv("JOB_SEARCH_HH_REDIRECT_URI", "http://127.0.0.1:8767/oauth/callback")
     report = build_authorize_url()
     assert "client_id=cid" in report["authorize_url"]
     assert "csecret" not in json.dumps(report)
@@ -61,7 +61,7 @@ def test_exchange_authorization_code(tmp_path: Path, monkeypatch: pytest.MonkeyP
     settings = OAuthSettings(
         client_id="cid",
         client_secret="csecret",
-        redirect_uri="http://127.0.0.1:8765/oauth/callback",
+        redirect_uri="http://127.0.0.1:8767/oauth/callback",
         auth_host="https://hh.ru",
         user_agent="ua",
         timeout_seconds=5.0,

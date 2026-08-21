@@ -29,7 +29,7 @@ Expected: `auth_session=present`, `login_ready=true`.
 6. Acquire an OAuth access token via loopback callback (preferred):
 
 ```bash
-# returns authorize_url immediately; listener waits on 127.0.0.1:8765
+# returns authorize_url immediately; listener waits on 127.0.0.1:8767
 docker compose exec -T hh python -m job_search_hh.cli auth oauth-acquire --detach
 # open authorize_url in host browser or noVNC; HH redirects to loopback callback
 docker compose exec -T hh python -m job_search_hh.cli auth token-status

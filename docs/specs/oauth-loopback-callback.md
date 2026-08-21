@@ -15,7 +15,7 @@
 - on `GET .../oauth/callback?code=...` exchanges the code and stores tokens via
   the existing private token store;
 - `--detach` returns `authorize_url` immediately and listens in a child process;
-- Compose publishes `127.0.0.1:8765:8765` for host-browser redirects;
+- Compose publishes `127.0.0.1:8767:8767` for host-browser redirects;
 - CLI JSON still never includes raw `access_token` / `refresh_token` /
   `client_secret`.
 
