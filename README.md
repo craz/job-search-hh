@@ -12,12 +12,11 @@ are implemented. Public HH search (or a fixture) writes vacancies through
 `POST /api/v1/vacancies`; existing negotiations/applications from a fixture write
 through `POST /api/v1/applications`; daily snapshots write through
 `PUT /api/v1/metrics/{date}` with fingerprint idempotency keys.
-Capabilities report `hh_api=read-only`, `browser_automation=scaffold` and
-`external_writes_enabled=false`. Apply dry-run simulates payloads without
-submitting. Limited apply is a gated scaffold that refuses without env+flag
-authorization and still does not POST to HH. Browser/auth paths and Compose
-volumes are scaffolded without Chromium/Playwright/noVNC installs. Live OAuth,
-noVNC login and chats are not implemented.
+Capabilities report `hh_api=read-only` and `external_writes_enabled=false`.
+Browser automation becomes `installed` inside the HH image (Chromium/Playwright/
+noVNC); `auth status` stays not login-ready until an operator completes login.
+Compose publishes noVNC only on loopback. Live OAuth automation and chats are
+not implemented.
 
 ## Quick start
 

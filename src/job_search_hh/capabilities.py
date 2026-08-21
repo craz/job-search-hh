@@ -1,7 +1,7 @@
 """Machine-readable declaration of the HH integration's safe current scope.
 
 Capability metadata prevents consumers from mistaking an installed package for
-configured automation and keeps the external-write default explicit.
+a completed login session and keeps the external-write default explicit.
 """
 
 from __future__ import annotations
@@ -10,13 +10,14 @@ from dataclasses import asdict, dataclass
 from typing import Final
 
 from job_search_hh import __version__
+from job_search_hh.session import browser_automation_level
 
 COMPONENT_NAME: Final = "job-search-hh"
 
 
 @dataclass(frozen=True)
 class Capabilities:
-    """Current integration readiness without secrets or environment inspection."""
+    """Current integration readiness without secrets."""
 
     component: str
     version: str
@@ -34,7 +35,7 @@ def current_capabilities() -> Capabilities:
     return Capabilities(
         component=COMPONENT_NAME,
         version=__version__,
-        browser_automation="scaffold",
+        browser_automation=browser_automation_level(),
         hh_api="read-only",
         external_writes_enabled=False,
     )

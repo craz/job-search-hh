@@ -1,9 +1,10 @@
-"""Persistent HH state/profile paths and single-process profile lock stub."""
+"""Persistent HH state/profile paths, browser detection and profile lock."""
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,9 +14,16 @@ class SessionError(Exception):
     """Stable failure for session/profile scaffold boundaries."""
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().casefold() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class SessionPaths:
-    """HH-owned runtime directories without requiring Chromium to exist."""
+    """HH-owned runtime directories for profile and private state."""
 
     state_dir: Path
     profile_dir: Path
@@ -65,8 +73,32 @@ def _module_available(name: str) -> bool:
     return True
 
 
+def chromium_installed() -> bool:
+    """Detect Chromium binary or an image that marked the install complete."""
+    if _env_flag("HH_CHROMIUM_INSTALLED"):
+        return True
+    return any(
+        shutil.which(name) for name in ("chromium", "chromium-browser", "google-chrome", "chrome")
+    )
+
+
+def novnc_configured() -> bool:
+    """Detect noVNC web assets and explicit enablement for the runtime."""
+    if not _env_flag("HH_NOVNC_ENABLED"):
+        return False
+    web = Path(os.getenv("HH_NOVNC_WEB", "/usr/share/novnc"))
+    return web.exists()
+
+
+def browser_automation_level() -> str:
+    """Return scaffold until Chromium+noVNC are present; never claim login-ready."""
+    if chromium_installed() and novnc_configured():
+        return "installed"
+    return "scaffold"
+
+
 def session_status(paths: SessionPaths | None = None) -> dict[str, Any]:
-    """Describe scaffold readiness without launching a browser."""
+    """Describe browser/auth runtime without launching HH login."""
     resolved = paths or SessionPaths.from_env()
     resolved.ensure()
     lock = ProfileLock(resolved.profile_dir)
@@ -80,11 +112,13 @@ def session_status(paths: SessionPaths | None = None) -> dict[str, Any]:
                 auth_session = status
         except (OSError, ValueError):
             auth_session = "invalid"
+    level = browser_automation_level()
     return {
-        "browser_automation": "scaffold",
-        "chromium_installed": False,
+        "browser_automation": level,
+        "chromium_installed": chromium_installed(),
         "playwright_installed": _module_available("playwright"),
-        "novnc_configured": False,
+        "novnc_configured": novnc_configured(),
+        "novnc_port": int(os.getenv("HH_NOVNC_PORT", "6080")),
         "profile_dir": str(resolved.profile_dir.resolve()),
         "state_dir": str(resolved.state_dir.resolve()),
         "profile_lock": lock.status(),

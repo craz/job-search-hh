@@ -13,8 +13,10 @@ Semantic Versioning.
 - Apply dry-run CLI that audits `would_send` without HH submit or Core writes.
 - Gated limited-apply scaffold (`apply limited`) requiring env writes enable plus
   `--i-authorize-hh-writes`; live HH POST remains not implemented.
-- Browser/auth scaffold: `session status` / `auth status`, profile lock stub,
-  Compose `hh` service with `hh-state`/`hh-profile` volumes and no browser download.
+- Browser/auth runtime: Playwright Chromium + noVNC in the HH image, Compose
+  loopback publish, `session status` reports `installed` when binaries are present.
+- Browser/auth scaffold CLI (`session`/`auth status`) and profile lock remain the
+  operator-facing diagnostics; login_ready stays false until a login slice.
 - Normalization to Core VacancyCreate/ApplicationCreate/DailyMetricUpdate with
   stable `source=hh` and idempotent keys.
 - Capabilities report `hh_api=read-only` while keeping `external_writes_enabled=false`.

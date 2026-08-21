@@ -12,7 +12,7 @@ def test_capabilities_envelope_has_stable_version_and_identity() -> None:
     assert envelope.data["component"] == "job-search-hh"
     assert envelope.data["external_writes_enabled"] is False
     assert envelope.data["hh_api"] == "read-only"
-    assert envelope.data["browser_automation"] == "scaffold"
+    assert envelope.data["browser_automation"] in {"scaffold", "installed"}
     assert envelope.data["hh_api"] == "read-only"
 
 

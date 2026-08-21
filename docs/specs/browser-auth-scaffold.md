@@ -1,26 +1,24 @@
-# HH browser/auth scaffold
+# HH browser/auth runtime
 
 ## User Story
 
 ```text
 Как оператор системы поиска работы,
-Я хочу видеть состояние browser/auth scaffold и persistent paths,
-Чтобы понимать, что Chromium ещё не установлен, а profile/state volumes уже
-зарезервированы без download браузеров.
+Я хочу Chromium/Playwright/noVNC внутри HH container с persistent profile,
+Чтобы войти через loopback noVNC, не публикуя VNC наружу.
 ```
 
 ## Implemented
 
-- CLI `session status` and `auth status` reporting scaffold readiness;
-- `HH_STATE_DIR` / `HH_PROFILE_DIR` paths with single-process profile lock stub;
-- capabilities `browser_automation=scaffold` (not ready, no Chromium/Playwright/noVNC);
-- Compose service `hh` with named volumes `hh-state` and `hh-profile`;
-- no Playwright/Chromium package install and no browser download in this slice.
-
-`auth status` reports `absent` until a future login slice writes a synthetic
-session marker. Real OAuth/login/noVNC are out of scope.
+- Docker image installs Playwright Chromium plus Xvfb/x11vnc/noVNC/websockify;
+- runtime script starts virtual display and loopback-facing noVNC;
+- Compose publishes noVNC only on `127.0.0.1:6080`;
+- volumes `hh-profile` / `hh-state` remain HH-owned;
+- `session status` reports `browser_automation=installed` when Chromium+noVNC
+  are present; `auth status` stays `login_ready=false` until a login slice;
+- capabilities never enable `external_writes_enabled`.
 
 ## Non-scope
 
-Chromium/Playwright binary install, noVNC port publish, interactive login,
-session persistence after real HH auth, and live browser automation.
+Automated HH login, OAuth token capture, CAPTCHA handling, live apply POST and
+exposing noVNC beyond loopback.

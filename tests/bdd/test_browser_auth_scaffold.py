@@ -20,7 +20,10 @@ def prepared_paths(tmp_path: Path) -> SessionPaths:
 
 
 @when("оператор запрашивает session status", target_fixture="session_report")
-def request_session_status(session_paths: SessionPaths) -> dict[str, Any]:
+def request_session_status(session_paths: SessionPaths, monkeypatch: Any) -> dict[str, Any]:
+    monkeypatch.delenv("HH_CHROMIUM_INSTALLED", raising=False)
+    monkeypatch.delenv("HH_NOVNC_ENABLED", raising=False)
+    monkeypatch.setattr("job_search_hh.session.shutil.which", lambda _name: None)
     return session_status(session_paths)
 
 
