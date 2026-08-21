@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
-from pathlib import Path
+import time
 
+from job_search_hh.oauth import (
+    OAuthError,
+    load_token_record,
+    plain_access_token_path,
+    refresh_token_record,
+    token_status,
+)
 from job_search_hh.session import SessionPaths, auth_status
 
 
@@ -13,16 +21,25 @@ class LiveAuthError(Exception):
 
 
 def load_access_token(paths: SessionPaths | None = None) -> str:
-    """Load Bearer token from env or state file; never return cookies or logs."""
+    """Load Bearer token from env or private state files; never return cookies."""
     env_token = os.getenv("JOB_SEARCH_HH_ACCESS_TOKEN", "").strip()
     if env_token:
         return env_token
-    resolved = paths or SessionPaths.from_env()
-    resolved.ensure()
-    default_file = resolved.state_dir / "access_token"
-    token_file = Path(os.getenv("JOB_SEARCH_HH_ACCESS_TOKEN_FILE", str(default_file)))
-    if token_file.is_file():
-        return token_file.read_text(encoding="utf-8").strip()
+
+    record = load_token_record(paths)
+    if record is not None:
+        expires_at = record.expires_at
+        if expires_at is not None and time.time() >= expires_at - 60:
+            if record.refresh_token:
+                with contextlib.suppress(OAuthError):
+                    record = refresh_token_record(paths)
+            elif time.time() >= expires_at:
+                return ""
+        return record.access_token
+
+    plain = plain_access_token_path(paths)
+    if plain.is_file():
+        return plain.read_text(encoding="utf-8").strip()
     return ""
 
 
@@ -35,3 +52,8 @@ def require_authenticated_read(paths: SessionPaths | None = None) -> str:
     if not token:
         raise LiveAuthError("access_token_missing")
     return token
+
+
+def access_token_status(paths: SessionPaths | None = None) -> dict[str, object]:
+    """Public token presence report; delegates to oauth.token_status."""
+    return token_status(paths)

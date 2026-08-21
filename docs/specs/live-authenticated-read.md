@@ -20,5 +20,6 @@
 
 ## Non-scope
 
-OAuth token acquisition UI, cookie→API bridging, resume-view history scrape,
-POST `/negotiations`, limited apply live transport and CAPTCHA bypass.
+Cookie→API bridging, resume-view history scrape, POST `/negotiations`, limited
+apply live transport and CAPTCHA bypass. OAuth URL/exchange/storage lives in
+[oauth-token-store.md](oauth-token-store.md).

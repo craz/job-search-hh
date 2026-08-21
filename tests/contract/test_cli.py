@@ -88,3 +88,18 @@ def test_cli_exposes_auth_open_confirm_clear() -> None:
     assert opened.auth_command == "open-login" and opened.detach is True
     assert confirmed.i_confirm_operator_login is True
     assert cleared.auth_command == "clear"
+
+
+def test_cli_exposes_oauth_token_commands() -> None:
+    parser = build_parser()
+    url = parser.parse_args(["auth", "oauth-url", "--state", "s1"])
+    exchange = parser.parse_args(["auth", "exchange-code", "--code", "abc"])
+    set_token = parser.parse_args(["auth", "set-token", "--token-file", "tok.txt"])
+    status = parser.parse_args(["auth", "token-status"])
+    clear_token = parser.parse_args(["auth", "clear-token"])
+
+    assert url.auth_command == "oauth-url" and url.state == "s1"
+    assert exchange.code == "abc"
+    assert str(set_token.token_file) == "tok.txt"
+    assert status.auth_command == "token-status"
+    assert clear_token.auth_command == "clear-token"

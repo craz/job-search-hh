@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -14,6 +15,14 @@ from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient
 from job_search_hh.live_auth import LiveAuthError, require_authenticated_read
+from job_search_hh.oauth import (
+    OAuthError,
+    build_authorize_url,
+    clear_token_record,
+    exchange_authorization_code,
+    set_access_token,
+    token_status,
+)
 from job_search_hh.providers import AuthenticatedHhApi, FixtureProvider, HttpHhApi
 from job_search_hh.session import (
     SessionError,
@@ -141,6 +150,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required explicit confirmation; does not capture cookies into JSON",
     )
     auth_sub.add_parser("clear", help="Clear session marker without deleting the profile")
+    oauth_url = auth_sub.add_parser(
+        "oauth-url",
+        help="Build HH OAuth authorize URL (never prints client_secret)",
+    )
+    oauth_url.add_argument("--state", default="job-search-hh", help="OAuth state parameter")
+    exchange = auth_sub.add_parser(
+        "exchange-code",
+        help="Exchange authorization code for tokens and store them privately",
+    )
+    exchange.add_argument("--code", required=True, help="Authorization code from redirect")
+    set_token = auth_sub.add_parser(
+        "set-token",
+        help="Store access token from file or stdin (token never appears in JSON)",
+    )
+    set_token_src = set_token.add_mutually_exclusive_group(required=True)
+    set_token_src.add_argument("--token-file", type=Path, help="Read access token from a file")
+    set_token_src.add_argument(
+        "--from-stdin",
+        action="store_true",
+        help="Read access token from stdin",
+    )
+    set_token.add_argument("--refresh-token-file", type=Path, help="Optional refresh token file")
+    set_token.add_argument("--expires-in", type=int, help="Optional lifetime seconds")
+    auth_sub.add_parser("token-status", help="Report token presence without dumping secrets")
+    auth_sub.add_parser("clear-token", help="Remove stored OAuth token files")
     return parser
 
 
@@ -277,6 +311,55 @@ def auth_clear_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=clear_login())
 
 
+def auth_oauth_url_envelope(args: argparse.Namespace) -> Envelope:
+    """Return authorize URL metadata without client_secret."""
+    try:
+        report = build_authorize_url(state=str(args.state))
+    except OAuthError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    return Envelope(schema_version=1, ok=True, data=report)
+
+
+def auth_exchange_code_envelope(args: argparse.Namespace) -> Envelope:
+    """Exchange code and return presence status only."""
+    try:
+        report = exchange_authorization_code(str(args.code))
+    except OAuthError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    return Envelope(schema_version=1, ok=True, data=report)
+
+
+def auth_set_token_envelope(args: argparse.Namespace) -> Envelope:
+    """Store token from file/stdin; JSON never includes the secret value."""
+    try:
+        if args.from_stdin:
+            access = sys.stdin.read()
+        else:
+            access = Path(args.token_file).read_text(encoding="utf-8")
+        refresh = None
+        if args.refresh_token_file is not None:
+            refresh = Path(args.refresh_token_file).read_text(encoding="utf-8")
+        report = set_access_token(
+            access,
+            refresh_token=refresh,
+            expires_in=args.expires_in,
+        )
+    except (OSError, OAuthError) as error:
+        message = str(error) if isinstance(error, OAuthError) else "token_read_failed"
+        return Envelope(schema_version=1, ok=False, data={"error": message})
+    return Envelope(schema_version=1, ok=True, data=report)
+
+
+def auth_token_status_envelope() -> Envelope:
+    """Report whether an access token is available without printing it."""
+    return Envelope(schema_version=1, ok=True, data=token_status())
+
+
+def auth_clear_token_envelope() -> Envelope:
+    """Delete persisted token files under the HH state directory."""
+    return Envelope(schema_version=1, ok=True, data=clear_token_record())
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print exactly one JSON envelope and return a process-compatible status."""
     args = build_parser().parse_args(argv)
@@ -302,9 +385,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = auth_confirm_envelope(args)
     elif args.command == "auth" and args.auth_command == "clear":
         envelope = auth_clear_envelope()
+    elif args.command == "auth" and args.auth_command == "oauth-url":
+        envelope = auth_oauth_url_envelope(args)
+    elif args.command == "auth" and args.auth_command == "exchange-code":
+        envelope = auth_exchange_code_envelope(args)
+    elif args.command == "auth" and args.auth_command == "set-token":
+        envelope = auth_set_token_envelope(args)
+    elif args.command == "auth" and args.auth_command == "token-status":
+        envelope = auth_token_status_envelope()
+    elif args.command == "auth" and args.auth_command == "clear-token":
+        envelope = auth_clear_token_envelope()
     else:  # pragma: no cover - argparse enforces choices
         return 2
-    print(json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True))
+    printed = json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True)
+    # Defense in depth: refuse to emit raw secret fields in the public envelope.
+    if (
+        '"access_token":' in printed
+        or '"refresh_token":' in printed
+        or '"client_secret":' in printed
+    ):
+        print(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "ok": False,
+                    "data": {"error": "token_leak_blocked"},
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 1
+    print(printed)
     return 0 if envelope.ok else 1
 
 

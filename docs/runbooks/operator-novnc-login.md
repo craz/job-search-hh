@@ -26,8 +26,18 @@ docker compose exec -T hh python -m job_search_hh.cli auth status
 
 Expected: `auth_session=present`, `login_ready=true`.
 
-6. For live authenticated API reads, place a user OAuth access token in the HH
-   state volume (never commit it) or set `JOB_SEARCH_HH_ACCESS_TOKEN`, then:
+6. Acquire an OAuth access token (never printed by CLI JSON):
+
+```bash
+docker compose exec -T hh python -m job_search_hh.cli auth oauth-url
+# open authorize_url, copy ?code=... from redirect, then:
+docker compose exec -T hh python -m job_search_hh.cli auth exchange-code --code 'PASTE_CODE'
+# or import a token file:
+# docker compose exec -T hh python -m job_search_hh.cli auth set-token --token-file /path/token
+docker compose exec -T hh python -m job_search_hh.cli auth token-status
+```
+
+7. For live authenticated API reads:
 
 ```bash
 docker compose exec -T hh python -m job_search_hh.cli applications sync
@@ -38,4 +48,10 @@ Clear the marker without wiping the profile volume:
 
 ```bash
 docker compose exec -T hh python -m job_search_hh.cli auth clear
+```
+
+Clear stored API tokens:
+
+```bash
+docker compose exec -T hh python -m job_search_hh.cli auth clear-token
 ```

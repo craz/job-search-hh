@@ -20,6 +20,8 @@ Semantic Versioning.
 - Live authenticated read: `applications|metrics sync` without `--fixture` uses
   Bearer GET `/negotiations` (metrics derived); requires `login_ready` + token;
   `hh_write_attempted=false`.
+- OAuth token store: `auth oauth-url` / `exchange-code` / `set-token` /
+  `token-status` / `clear-token`; secrets stay in state files, not CLI JSON.
 - Browser/auth scaffold CLI (`session`/`auth status`) and profile lock remain the
   operator-facing diagnostics until login is confirmed.
 - Normalization to Core VacancyCreate/ApplicationCreate/DailyMetricUpdate with
