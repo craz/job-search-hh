@@ -22,6 +22,9 @@ Semantic Versioning.
   `hh_write_attempted=false`.
 - OAuth token store: `auth oauth-url` / `exchange-code` / `set-token` /
   `token-status` / `clear-token`; secrets stay in state files, not CLI JSON.
+- Loopback OAuth callback: `auth oauth-acquire` listens on `127.0.0.1` redirect
+  and stores tokens after HH returns `code` (Compose publishes host loopback
+  `:8765`).
 - Browser/auth scaffold CLI (`session`/`auth status`) and profile lock remain the
   operator-facing diagnostics until login is confirmed.
 - Normalization to Core VacancyCreate/ApplicationCreate/DailyMetricUpdate with

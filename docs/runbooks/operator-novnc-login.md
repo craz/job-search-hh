@@ -26,15 +26,20 @@ docker compose exec -T hh python -m job_search_hh.cli auth status
 
 Expected: `auth_session=present`, `login_ready=true`.
 
-6. Acquire an OAuth access token (never printed by CLI JSON):
+6. Acquire an OAuth access token via loopback callback (preferred):
+
+```bash
+# returns authorize_url immediately; listener waits on 127.0.0.1:8765
+docker compose exec -T hh python -m job_search_hh.cli auth oauth-acquire --detach
+# open authorize_url in host browser or noVNC; HH redirects to loopback callback
+docker compose exec -T hh python -m job_search_hh.cli auth token-status
+```
+
+Manual fallback without callback:
 
 ```bash
 docker compose exec -T hh python -m job_search_hh.cli auth oauth-url
-# open authorize_url, copy ?code=... from redirect, then:
 docker compose exec -T hh python -m job_search_hh.cli auth exchange-code --code 'PASTE_CODE'
-# or import a token file:
-# docker compose exec -T hh python -m job_search_hh.cli auth set-token --token-file /path/token
-docker compose exec -T hh python -m job_search_hh.cli auth token-status
 ```
 
 7. For live authenticated API reads:

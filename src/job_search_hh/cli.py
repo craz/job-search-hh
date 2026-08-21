@@ -23,6 +23,7 @@ from job_search_hh.oauth import (
     set_access_token,
     token_status,
 )
+from job_search_hh.oauth_callback import oauth_acquire
 from job_search_hh.providers import AuthenticatedHhApi, FixtureProvider, HttpHhApi
 from job_search_hh.session import (
     SessionError,
@@ -175,6 +176,27 @@ def build_parser() -> argparse.ArgumentParser:
     set_token.add_argument("--expires-in", type=int, help="Optional lifetime seconds")
     auth_sub.add_parser("token-status", help="Report token presence without dumping secrets")
     auth_sub.add_parser("clear-token", help="Remove stored OAuth token files")
+    acquire = auth_sub.add_parser(
+        "oauth-acquire",
+        help="Listen on loopback redirect URI for OAuth code and store tokens",
+    )
+    acquire.add_argument("--state", default="job-search-hh", help="OAuth state parameter")
+    acquire.add_argument(
+        "--wait-seconds",
+        type=float,
+        default=300.0,
+        help="How long the callback listener waits for the redirect",
+    )
+    acquire.add_argument(
+        "--detach",
+        action="store_true",
+        help="Start listener in background and return authorize_url immediately",
+    )
+    acquire.add_argument(
+        "--foreground",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser
 
 
@@ -360,6 +382,19 @@ def auth_clear_token_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=clear_token_record())
 
 
+def auth_oauth_acquire_envelope(args: argparse.Namespace) -> Envelope:
+    """Run loopback callback acquire; JSON never includes raw tokens."""
+    try:
+        report = oauth_acquire(
+            state=str(args.state),
+            wait_seconds=float(args.wait_seconds),
+            detach=bool(args.detach) and not bool(args.foreground),
+        )
+    except OAuthError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+    return Envelope(schema_version=1, ok=True, data=report)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print exactly one JSON envelope and return a process-compatible status."""
     args = build_parser().parse_args(argv)
@@ -395,6 +430,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = auth_token_status_envelope()
     elif args.command == "auth" and args.auth_command == "clear-token":
         envelope = auth_clear_token_envelope()
+    elif args.command == "auth" and args.auth_command == "oauth-acquire":
+        envelope = auth_oauth_acquire_envelope(args)
     else:  # pragma: no cover - argparse enforces choices
         return 2
     printed = json.dumps(asdict(envelope), ensure_ascii=False, sort_keys=True)

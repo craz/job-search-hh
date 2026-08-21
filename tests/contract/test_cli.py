@@ -97,9 +97,11 @@ def test_cli_exposes_oauth_token_commands() -> None:
     set_token = parser.parse_args(["auth", "set-token", "--token-file", "tok.txt"])
     status = parser.parse_args(["auth", "token-status"])
     clear_token = parser.parse_args(["auth", "clear-token"])
+    acquire = parser.parse_args(["auth", "oauth-acquire", "--detach", "--wait-seconds", "12"])
 
     assert url.auth_command == "oauth-url" and url.state == "s1"
     assert exchange.code == "abc"
     assert str(set_token.token_file) == "tok.txt"
     assert status.auth_command == "token-status"
     assert clear_token.auth_command == "clear-token"
+    assert acquire.detach is True and acquire.wait_seconds == 12.0

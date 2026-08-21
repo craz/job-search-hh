@@ -24,5 +24,6 @@
 
 ## Non-scope
 
-Embedded loopback OAuth callback HTTP server, browser auto-fill of credentials,
-CAPTCHA bypass and live HH write transport.
+Non-loopback redirect hosts and automatic browser navigation remain in
+[oauth-loopback-callback.md](oauth-loopback-callback.md) / future slices.
+CAPTCHA bypass and live HH write transport stay out of scope.
