@@ -22,6 +22,9 @@ x11vnc -display "${DISPLAY_NUM}" -forever -shared -rfbport "${VNC_PORT}" -nopw -
 websockify --web="${NOVNC_WEB}" "0.0.0.0:${NOVNC_PORT}" "127.0.0.1:${VNC_PORT}" \
   >/tmp/websockify.log 2>&1 &
 
+HH_API_PORT="${HH_API_PORT:-8092}"
+python -m job_search_hh.api >/tmp/hh-api.log 2>&1 &
+
 while true; do
   python -m job_search_hh.cli session status >/tmp/hh-session.json || true
   sleep 30

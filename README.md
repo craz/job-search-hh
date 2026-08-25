@@ -21,8 +21,11 @@ noVNC). Operator login uses loopback noVNC plus `auth open-login` /
 `auth confirm --i-confirm-operator-login`; cookies stay in the profile volume and
 are never printed. OAuth token storage (`auth oauth-url` / `exchange-code` /
 `set-token` / `token-status`) keeps secrets out of CLI JSON. Loopback OAuth
-callback (`auth oauth-acquire` on `127.0.0.1:8767`) is implemented. CAPTCHA
-bypass and chats are not implemented.
+callback (`auth oauth-acquire` on `127.0.0.1:8767`) is implemented. Product-facing
+connection status (`connection status`, HTTP `GET /api/v1/connection`) maps
+session/token markers to connected / not_authorized / expired / action_required /
+unavailable without claiming endpoint permissions. CAPTCHA bypass and chats are
+not implemented.
 
 ## Quick start
 
@@ -43,6 +46,7 @@ CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh metrics sync
 uv run job-search-hh apply dry-run --fixture path/to/apply_plan.json
 uv run job-search-hh apply limited --fixture path/to/apply_plan.json --i-authorize-hh-writes
 uv run job-search-hh session status
+uv run job-search-hh connection status
 uv run job-search-hh auth status
 uv run job-search-hh auth open-login --detach
 uv run job-search-hh auth confirm --i-confirm-operator-login
@@ -81,6 +85,7 @@ See [vacancy sync](docs/specs/vacancy-sync.md),
 [resume-views metrics](docs/specs/resume-views-metrics.md),
 [oauth token store](docs/specs/oauth-token-store.md),
 [oauth loopback callback](docs/specs/oauth-loopback-callback.md),
+[connection status](docs/specs/connection-status.md),
 [HH read gate](docs/runbooks/hh-read-gate.md),
 [operator login runbook](docs/runbooks/operator-novnc-login.md),
 [safe scaffold](docs/specs/safe-scaffold.md) and executable Gherkin under

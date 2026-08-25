@@ -14,6 +14,7 @@ from job_search_hh.apply import ApplyError, dry_run_apply, limited_apply, load_a
 from job_search_hh.apply_transport import HttpApplyTransport
 from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
+from job_search_hh.connection import connection_status
 from job_search_hh.core_client import CoreClient
 from job_search_hh.live_auth import LiveAuthError, require_authenticated_read
 from job_search_hh.oauth import (
@@ -118,6 +119,13 @@ def build_parser() -> argparse.ArgumentParser:
     session_sub = session.add_subparsers(dest="session_command", required=True)
     session_sub.add_parser(
         "status", help="Report profile/state scaffold without launching Chromium"
+    )
+
+    connection = sub.add_parser("connection", help="Product-facing HH connection status")
+    connection_sub = connection.add_subparsers(dest="connection_command", required=True)
+    connection_sub.add_parser(
+        "status",
+        help="Report connected/not_authorized/expired/action_required/unavailable (no secrets)",
     )
 
     auth = sub.add_parser("auth", help="Operator authentication via noVNC")
@@ -328,6 +336,11 @@ def session_status_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=session_status())
 
 
+def connection_status_envelope() -> Envelope:
+    """Report product-facing connection status without secrets or endpoint claims."""
+    return Envelope(schema_version=1, ok=True, data=connection_status())
+
+
 def auth_status_envelope() -> Envelope:
     """Report auth marker without performing HH login."""
     return Envelope(schema_version=1, ok=True, data=auth_status())
@@ -438,6 +451,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = apply_limited_envelope(args)
     elif args.command == "session" and args.session_command == "status":
         envelope = session_status_envelope()
+    elif args.command == "connection" and args.connection_command == "status":
+        envelope = connection_status_envelope()
     elif args.command == "auth" and args.auth_command == "status":
         envelope = auth_status_envelope()
     elif args.command == "auth" and args.auth_command == "open-login":
