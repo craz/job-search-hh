@@ -26,6 +26,7 @@ from job_search_hh.oauth import (
     token_status,
 )
 from job_search_hh.oauth_callback import oauth_acquire
+from job_search_hh.profile import account_profile
 from job_search_hh.providers import AuthenticatedHhApi, FixtureProvider, HttpHhApi
 from job_search_hh.session import (
     SessionError,
@@ -126,6 +127,13 @@ def build_parser() -> argparse.ArgumentParser:
     connection_sub.add_parser(
         "status",
         help="Report connected/not_authorized/expired/action_required/unavailable (no secrets)",
+    )
+
+    account = sub.add_parser("account", help="Product-facing HH account/profile context")
+    account_sub = account.add_subparsers(dest="account_command", required=True)
+    account_sub.add_parser(
+        "status",
+        help="Report normalized HH account from GET /me (no raw payload, no secrets)",
     )
 
     auth = sub.add_parser("auth", help="Operator authentication via noVNC")
@@ -341,6 +349,11 @@ def connection_status_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=connection_status())
 
 
+def account_status_envelope() -> Envelope:
+    """Report normalized HH account/profile without raw /me or secrets."""
+    return Envelope(schema_version=1, ok=True, data=account_profile())
+
+
 def auth_status_envelope() -> Envelope:
     """Report auth marker without performing HH login."""
     return Envelope(schema_version=1, ok=True, data=auth_status())
@@ -453,6 +466,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = session_status_envelope()
     elif args.command == "connection" and args.connection_command == "status":
         envelope = connection_status_envelope()
+    elif args.command == "account" and args.account_command == "status":
+        envelope = account_status_envelope()
     elif args.command == "auth" and args.auth_command == "status":
         envelope = auth_status_envelope()
     elif args.command == "auth" and args.auth_command == "open-login":

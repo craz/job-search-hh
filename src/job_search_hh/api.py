@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from job_search_hh.connection import connection_status
+from job_search_hh.profile import account_profile
 from job_search_hh.session import SessionError, clear_login, confirm_login, open_login
 
 
@@ -42,6 +43,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/v1/connection":
             self._json(HTTPStatus.OK, connection_status())
+            return
+        if parsed.path == "/api/v1/account":
+            self._json(HTTPStatus.OK, account_profile())
             return
         self._json(
             HTTPStatus.NOT_FOUND,
