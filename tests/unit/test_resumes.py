@@ -12,6 +12,7 @@ from job_search_hh.resumes import (
     STATUS_NOT_AUTHORIZED,
     STATUS_PERMISSION_BLOCKED,
     STATUS_UNAVAILABLE,
+    _clean_resume_title,
     list_resumes,
     parse_resume_href,
 )
@@ -91,6 +92,15 @@ def test_permission_blocked_is_explicit(tmp_path: Path, monkeypatch: pytest.Monk
     assert report["items"] == []
 
 
+def test_clean_resume_title_strips_bump_chrome() -> None:
+    dirty = (
+        "Project Manager / Руководитель IT-проектов"
+        "Поднять вручную можно сегодня в 14:45"
+        "Подключено автоподнятие"
+    )
+    assert _clean_resume_title(dirty) == "Project Manager / Руководитель IT-проектов"
+
+
 def test_available_list_normalized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
     paths = _paths(tmp_path)
@@ -100,7 +110,10 @@ def test_available_list_normalized(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         return {
             "kind": "ok",
             "items": [
-                {"external_id": "resumehash01", "title": "  Product Manager  "},
+                {
+                    "external_id": "resumehash01",
+                    "title": "Product ManagerПоднять вручную можно сегодняПодключено автоподнятие",
+                },
                 {"external_id": "resumehash01", "title": "dup"},
                 {"external_id": "x", "title": "too-short-id"},
                 {"external_id": "resumehash02", "title": "Engineer"},

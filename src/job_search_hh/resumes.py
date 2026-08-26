@@ -42,6 +42,30 @@ def _novnc_url() -> str:
     return novnc_public_url()
 
 
+def _clean_resume_title(title: str) -> str:
+    """Keep the human resume name; drop HH card chrome glued into textContent."""
+    cleaned = " ".join((title or "").split())
+    if not cleaned:
+        return ""
+    # Truncate at known bump / auto-raise / edit chrome (RU + EN).
+    cut_markers = (
+        "Поднять вручную",
+        "Подключено автоподнятие",
+        "Автоподнятие",
+        "автоподнятие",
+        "Дополнить резюме",
+        "Обновить дату",
+        "Raise manually",
+        "Auto-raise",
+    )
+    cut_at = len(cleaned)
+    for marker in cut_markers:
+        idx = cleaned.find(marker)
+        if idx != -1:
+            cut_at = min(cut_at, idx)
+    return cleaned[:cut_at].strip(" ·|-–—")
+
+
 def _normalize_items(raw_items: list[Any]) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -53,7 +77,7 @@ def _normalize_items(raw_items: list[Any]) -> list[dict[str, str]]:
         if not isinstance(external_id, str) or not isinstance(title, str):
             continue
         external_id = external_id.strip()
-        title = " ".join(title.split())
+        title = _clean_resume_title(title)
         if not external_id or not title or external_id in seen:
             continue
         if len(external_id) < 6:
@@ -86,24 +110,32 @@ def _extract_from_page(page: Any) -> dict[str, Any]:
           }
           const items = [];
           const seen = new Set();
-          const anchors = Array.from(document.querySelectorAll('a[href*="/resume/"]'));
-          for (const a of anchors) {
-            const href = a.getAttribute('href') || '';
+
+          const cards = Array.from(document.querySelectorAll('[data-qa^="resume-card-link-"]'));
+          const collectFrom = cards.length
+            ? cards
+            : Array.from(document.querySelectorAll('a[href*="/resume/"]'));
+
+          for (const node of collectFrom) {
+            const href = node.getAttribute('href') || '';
             const match = href.match(/\\/resume\\/([0-9A-Za-z_-]{6,})/);
             if (!match) continue;
             const id = match[1];
             if (seen.has(id)) continue;
-            let title = (a.textContent || '').trim().replace(/\\s+/g, ' ');
-            if (!title || title.length < 2) {
-              const root = a.closest('[data-qa*="resume"], article, li, section, div');
-              const heading = root && root.querySelector(
-                'h1, h2, h3, [data-qa*="title"], [data-qa*="name"]'
-              );
-              title = heading ? (heading.textContent || '').trim().replace(/\\s+/g, ' ') : '';
+
+            const root = node.closest('[data-qa*="resume"], article, li, section, div') || node;
+            const titleNode =
+              root.querySelector('[data-qa="resume-title"]') ||
+              root.querySelector('h3[data-qa="title"], [data-qa="title"]') ||
+              null;
+            let title = titleNode
+              ? (titleNode.textContent || '').trim().replace(/\\s+/g, ' ')
+              : '';
+            if (!title) {
+              title = (node.textContent || '').trim().replace(/\\s+/g, ' ');
             }
             if (!title || title.length < 2) continue;
-            // Skip obvious chrome / footer noise.
-            if (/cookie|footer|политик|blog|expert/i.test(title)) continue;
+            if (/cookie|footer|политик|blog|expert|^дополнить резюме$/i.test(title)) continue;
             seen.add(id);
             items.push({ external_id: id, title });
           }
