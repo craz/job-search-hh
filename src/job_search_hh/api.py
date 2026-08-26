@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from job_search_hh.active_resume import set_active_resume
 from job_search_hh.connection import connection_status
+from job_search_hh.core_linkage import sync_active_resume_link
 from job_search_hh.profile import account_profile
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.session import SessionError, SessionPaths, clear_login, confirm_login, open_login
@@ -111,7 +112,23 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not result.get("ok"):
             self._json(HTTPStatus.CONFLICT, result)
             return
-        self._json(HTTPStatus.OK, result["resumes"])
+        resumes = result["resumes"]
+        title = None
+        active = resumes.get("active_resume")
+        if isinstance(active, dict):
+            title = active.get("title") if isinstance(active.get("title"), str) else None
+        status = None
+        selection = resumes.get("selection") if isinstance(resumes.get("selection"), dict) else {}
+        if selection.get("status") == "stale":
+            status = "stale"
+        elif external_id is None:
+            status = "cleared"
+        resumes["core_linkage"] = sync_active_resume_link(
+            external_resume_id=external_id,
+            title=title,
+            status=status,
+        )
+        self._json(HTTPStatus.OK, resumes)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)

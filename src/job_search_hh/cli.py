@@ -17,6 +17,7 @@ from job_search_hh.capabilities import current_capabilities
 from job_search_hh.config import Settings
 from job_search_hh.connection import connection_status
 from job_search_hh.core_client import CoreClient
+from job_search_hh.core_linkage import sync_active_resume_link
 from job_search_hh.live_auth import LiveAuthError, require_authenticated_read
 from job_search_hh.oauth import (
     OAuthError,
@@ -403,7 +404,18 @@ def resumes_select_envelope(external_id: str | None) -> Envelope:
                 "resumes": result.get("resumes"),
             },
         )
-    return Envelope(schema_version=1, ok=True, data=result["resumes"])
+    resumes = result["resumes"]
+    title = None
+    active = resumes.get("active_resume")
+    if isinstance(active, dict) and isinstance(active.get("title"), str):
+        title = active.get("title")
+    status = "cleared" if external_id is None else None
+    resumes["core_linkage"] = sync_active_resume_link(
+        external_resume_id=external_id,
+        title=title,
+        status=status,
+    )
+    return Envelope(schema_version=1, ok=True, data=resumes)
 
 
 def auth_status_envelope() -> Envelope:

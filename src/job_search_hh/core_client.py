@@ -106,3 +106,22 @@ class CoreClient:
             payload=payload,
             headers={"Idempotency-Key": idempotency_key},
         )
+
+    def get_candidate_context(self) -> dict[str, Any]:
+        """Read operator CandidateProfile / ProfileVersion / HH resume link."""
+        return self._request("GET", "/api/v1/candidate-context")
+
+    def put_hh_resume_link(
+        self,
+        *,
+        external_resume_id: str | None,
+        title: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        """Create/update/clear ActiveHhResumeLink in Core (R1.5)."""
+        payload: dict[str, Any] = {"external_resume_id": external_resume_id}
+        if title is not None:
+            payload["title"] = title
+        if status is not None:
+            payload["status"] = status
+        return self._request("PUT", "/api/v1/candidate-context/hh-resume-link", payload=payload)
