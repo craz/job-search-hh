@@ -46,6 +46,7 @@ def test_valid_session_is_connected(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert report["expired"] is False
     assert report["action"]["code"] == "none"
     assert report["code"] == "ready"
+    assert report["recovery"]["kind"] == "none"
     blob = json.dumps(report)
     assert "fixture-access-token" not in blob
 
@@ -64,6 +65,7 @@ def test_expired_token_is_session_expired(tmp_path: Path, monkeypatch: pytest.Mo
     assert report["status"] == STATUS_EXPIRED
     assert report["expired"] is True
     assert report["action"]["code"] == "reconnect"
+    assert report["recovery"]["kind"] == "reauth"
     assert "expired-token" not in json.dumps(report)
 
 

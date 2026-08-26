@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from job_search_hh.recovery import with_recovery
 from job_search_hh.session import SessionPaths
 
 SELECTION_NONE = "none"
@@ -98,7 +99,7 @@ def attach_selection(report: dict[str, Any], paths: SessionPaths) -> dict[str, A
             "available": False,
         }
         report["active_resume"] = None
-        return report
+        return with_recovery(report)
 
     if stored is None:
         report["selection"] = {
@@ -107,7 +108,7 @@ def attach_selection(report: dict[str, Any], paths: SessionPaths) -> dict[str, A
             "available": True,
         }
         report["active_resume"] = None
-        return report
+        return with_recovery(report)
 
     match = next((item for item in annotated if item.get("external_id") == stored), None)
     if match is None:
@@ -118,7 +119,7 @@ def attach_selection(report: dict[str, Any], paths: SessionPaths) -> dict[str, A
             "action": {"code": "reselect"},
         }
         report["active_resume"] = None
-        return report
+        return with_recovery(report)
 
     match["active"] = True
     report["selection"] = {
@@ -130,7 +131,7 @@ def attach_selection(report: dict[str, Any], paths: SessionPaths) -> dict[str, A
         "external_id": match["external_id"],
         "title": match["title"],
     }
-    return report
+    return with_recovery(report)
 
 
 def set_active_resume(

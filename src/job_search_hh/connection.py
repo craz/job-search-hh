@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from job_search_hh.oauth import token_status
+from job_search_hh.recovery import with_recovery
 from job_search_hh.session import SessionPaths, auth_status
 
 STATUS_CONNECTED = "connected"
@@ -55,6 +56,10 @@ def connection_status(paths: SessionPaths | None = None) -> dict[str, Any]:
     login confirmed and a non-expired access token is present). It does **not**
     assert that every HH API endpoint is permitted.
     """
+    return with_recovery(_connection_status_raw(paths))
+
+
+def _connection_status_raw(paths: SessionPaths | None = None) -> dict[str, Any]:
     checked_at = _utc_now()
     try:
         auth = auth_status(paths)

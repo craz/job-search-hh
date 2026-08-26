@@ -17,6 +17,7 @@
 - Mapping reuses existing auth/session/token markers; no second auth system
 - Secrets never appear in envelopes
 - Connected does **not** claim `/me`, `/resumes/mine`, or negotiations access
+- Additive `recovery` taxonomy (R1.6): see [`recovery-states.md`](recovery-states.md)
 
 ## Non-scope
 

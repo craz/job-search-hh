@@ -2,6 +2,7 @@
 
 Normalized contract only — never proxies the raw `/me` body to Web/domain.
 Connection (R1.1) and profile capability stay separate.
+R1.6 attaches unified ``recovery`` on every envelope.
 """
 
 from __future__ import annotations
@@ -23,11 +24,13 @@ from job_search_hh.connection import (
     connection_status,
 )
 from job_search_hh.live_auth import load_access_token
+from job_search_hh.recovery import with_recovery
 from job_search_hh.session import SessionPaths
 
 PROFILE_AVAILABLE = "available"
 PROFILE_NOT_AUTHORIZED = "not_authorized"
 PROFILE_EXPIRED = "expired"
+PROFILE_ACTION_REQUIRED = "action_required"
 PROFILE_PERMISSION_BLOCKED = "permission_blocked"
 PROFILE_UNAVAILABLE = "unavailable"
 
@@ -62,6 +65,17 @@ def _normalize_account(payload: dict[str, Any]) -> dict[str, str] | None:
     if isinstance(email, str) and email.strip():
         account["email"] = email.strip()
     return account
+
+
+def _connection_action(connection: dict[str, Any], *, default_code: str = "none") -> dict[str, Any]:
+    action = connection.get("action")
+    if isinstance(action, dict) and isinstance(action.get("code"), str):
+        out: dict[str, Any] = {"code": action["code"]}
+        novnc = action.get("novnc_url")
+        if isinstance(novnc, str) and novnc.strip():
+            out["novnc_url"] = novnc.strip()
+        return out
+    return {"code": default_code}
 
 
 def _fetch_me(
@@ -112,6 +126,15 @@ def account_profile(
 
     Does not claim resume-list capability. Never includes tokens or raw `/me`.
     """
+    return with_recovery(_account_profile_raw(paths, settings=settings, me_fetcher=me_fetcher))
+
+
+def _account_profile_raw(
+    paths: SessionPaths | None = None,
+    *,
+    settings: Settings | None = None,
+    me_fetcher: Any | None = None,
+) -> dict[str, Any]:
     checked_at = _utc_now()
     connection = connection_status(paths)
     connection_state = str(connection.get("status") or STATUS_UNAVAILABLE)
@@ -120,6 +143,7 @@ def account_profile(
         "account": None,
         "connection_status": connection_state,
         "checked_at": checked_at,
+        "action": {"code": "none"},
     }
 
     if connection_state == STATUS_NOT_AUTHORIZED:
@@ -127,24 +151,28 @@ def account_profile(
             **base,
             "status": PROFILE_NOT_AUTHORIZED,
             "code": "connection_not_authorized",
+            "action": _connection_action(connection, default_code="open_login"),
         }
     if connection_state == STATUS_EXPIRED:
         return {
             **base,
             "status": PROFILE_EXPIRED,
             "code": "connection_expired",
+            "action": _connection_action(connection, default_code="reconnect"),
         }
     if connection_state == STATUS_ACTION_REQUIRED:
         return {
             **base,
-            "status": PROFILE_NOT_AUTHORIZED,
+            "status": PROFILE_ACTION_REQUIRED,
             "code": str(connection.get("code") or "connection_action_required"),
+            "action": _connection_action(connection),
         }
     if connection_state != STATUS_CONNECTED:
         return {
             **base,
             "status": PROFILE_UNAVAILABLE,
             "code": str(connection.get("code") or "connection_unavailable"),
+            "action": _connection_action(connection),
         }
 
     try:
@@ -158,8 +186,9 @@ def account_profile(
     if not token:
         return {
             **base,
-            "status": PROFILE_NOT_AUTHORIZED,
+            "status": PROFILE_ACTION_REQUIRED,
             "code": "access_token_missing",
+            "action": {"code": "acquire_token"},
         }
 
     cfg = settings or Settings.from_env()
@@ -172,10 +201,17 @@ def account_profile(
     )
 
     if http_status == 401:
+        action = _connection_action(connection, default_code="reconnect")
+        if action.get("code") in {None, "none"}:
+            action = {"code": "reconnect"}
+            novnc = connection.get("action")
+            if isinstance(novnc, dict) and isinstance(novnc.get("novnc_url"), str):
+                action["novnc_url"] = novnc["novnc_url"]
         return {
             **base,
             "status": PROFILE_NOT_AUTHORIZED,
             "code": "me_unauthorized",
+            "action": action,
         }
     if http_status == 403:
         return {

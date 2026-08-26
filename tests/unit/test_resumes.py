@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from job_search_hh.resumes import (
+    STATUS_ACTION_REQUIRED,
     STATUS_AVAILABLE,
     STATUS_NOT_AUTHORIZED,
     STATUS_PERMISSION_BLOCKED,
@@ -43,6 +44,7 @@ def test_without_browser_login_skips_reader(
     assert report["code"] == "browser_login_required"
     assert report["items"] == []
     assert report["action"]["code"] == "open_login"
+    assert report["recovery"]["kind"] == "reauth"
     assert called["n"] == 0
 
 
@@ -90,6 +92,23 @@ def test_permission_blocked_is_explicit(tmp_path: Path, monkeypatch: pytest.Monk
     report = list_resumes(paths, page_reader=blocked)
     assert report["status"] == STATUS_PERMISSION_BLOCKED
     assert report["items"] == []
+    assert report["recovery"]["kind"] == "external_limitation"
+
+
+def test_captcha_page_is_action_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+
+    def captcha(**_kwargs: Any) -> dict[str, Any]:
+        return {"kind": "captcha_or_action_required", "items": []}
+
+    report = list_resumes(paths, page_reader=captcha)
+    assert report["status"] == STATUS_ACTION_REQUIRED
+    assert report["code"] == "browser_captcha_or_action_required"
+    assert report["items"] == []
+    assert report["action"]["code"] == "confirm_login"
+    assert report["recovery"]["kind"] == "captcha_or_action_required"
 
 
 def test_clean_resume_title_strips_bump_chrome() -> None:

@@ -103,6 +103,13 @@ def _extract_from_page(page: Any) -> dict[str, Any]:
           if (login) {
             return { kind: 'login_required', items: [] };
           }
+          const captcha = document.querySelector(
+            '[data-qa="account-captcha"], [data-qa="captcha"], ' +
+            '.bloko-captcha, iframe[src*="captcha"], [class*="Captcha"]'
+          );
+          if (captcha) {
+            return { kind: 'captcha_or_action_required', items: [] };
+          }
           const forbidden = document.querySelector(
             '[data-qa="error-forbidden"], [data-qa="vacancy-forbidden"]'
           );
@@ -281,6 +288,13 @@ def _list_resumes_raw(
             "status": STATUS_NOT_AUTHORIZED,
             "code": "browser_session_not_logged_in",
             "action": {"code": "open_login", "novnc_url": _novnc_url()},
+        }
+    if kind == "captcha_or_action_required":
+        return {
+            **base,
+            "status": STATUS_ACTION_REQUIRED,
+            "code": "browser_captcha_or_action_required",
+            "action": {"code": "confirm_login", "novnc_url": _novnc_url()},
         }
     if kind == "permission_blocked":
         return {

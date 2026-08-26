@@ -10,6 +10,7 @@ import pytest
 
 from job_search_hh.oauth import set_access_token
 from job_search_hh.profile import (
+    PROFILE_ACTION_REQUIRED,
     PROFILE_AVAILABLE,
     PROFILE_EXPIRED,
     PROFILE_NOT_AUTHORIZED,
@@ -94,6 +95,7 @@ def test_me_200_normalizes_account(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "display_name": "Alex Example",
         "email": "alex@example.test",
     }
+    assert report["recovery"]["kind"] == "none"
     blob = json.dumps(report)
     assert "fixture-access-token" not in blob
     assert "phone" not in blob
@@ -111,6 +113,8 @@ def test_me_401(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert report["status"] == PROFILE_NOT_AUTHORIZED
     assert report["code"] == "me_unauthorized"
     assert report["account"] is None
+    assert report["action"]["code"] == "reconnect"
+    assert report["recovery"]["kind"] == "reauth"
 
 
 def test_me_403(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,6 +126,30 @@ def test_me_403(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     report = account_profile(paths, me_fetcher=fake_me)
     assert report["status"] == PROFILE_PERMISSION_BLOCKED
     assert report["code"] == "me_forbidden"
+    assert report["recovery"]["kind"] == "external_limitation"
+
+
+def test_connection_action_required_stays_distinct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from job_search_hh.session import write_auth_session
+
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    write_auth_session(paths, "pending_operator", source="test")
+
+    called = {"n": 0}
+
+    def boom(**_kwargs: Any) -> tuple[int | None, dict[str, Any] | None, str | None]:
+        called["n"] += 1
+        return 200, {"id": "x"}, None
+
+    report = account_profile(paths, me_fetcher=boom)
+    assert report["status"] == PROFILE_ACTION_REQUIRED
+    assert report["code"] == "operator_confirm_required"
+    assert report["action"]["code"] == "confirm_login"
+    assert report["recovery"]["kind"] == "captcha_or_action_required"
+    assert called["n"] == 0
 
 
 def test_me_upstream_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
