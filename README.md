@@ -26,7 +26,10 @@ connection status (`connection status`, HTTP `GET /api/v1/connection`) maps
 session/token markers to connected / not_authorized / expired / action_required /
 unavailable without claiming endpoint permissions. Account context
 (`account status`, HTTP `GET /api/v1/account`) normalizes official `GET /me`
-identity fields only. CAPTCHA bypass and chats are not implemented.
+identity fields only. Under the workspace Compose stack, a loopback host HTTP
+proxy is bridged into Docker by `make up` / `make dev` (workspace runbook
+`docs/runbooks/hh-docker-host-proxy.md`). CAPTCHA bypass and chats are not
+implemented.
 
 ## Quick start
 
