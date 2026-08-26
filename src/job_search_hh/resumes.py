@@ -15,7 +15,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 from job_search_hh.connection import connection_status
-from job_search_hh.session import ProfileLock, SessionError, SessionPaths, auth_status
+from job_search_hh.session import (
+    ProfileLock,
+    SessionError,
+    SessionPaths,
+    auth_status,
+    novnc_public_url,
+)
 
 DEFAULT_RESUMES_URL = "https://hh.ru/applicant/resumes"
 
@@ -33,8 +39,7 @@ def _utc_now() -> str:
 
 
 def _novnc_url() -> str:
-    port = int(os.getenv("HH_NOVNC_PORT", "6080"))
-    return f"http://127.0.0.1:{port}/"
+    return novnc_public_url()
 
 
 def _normalize_items(raw_items: list[Any]) -> list[dict[str, str]]:

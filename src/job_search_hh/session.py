@@ -102,6 +102,12 @@ def chromium_installed() -> bool:
     )
 
 
+def novnc_public_url() -> str:
+    """Loopback URL that opens the interactive HH desktop (not a directory listing)."""
+    port = int(os.getenv("HH_NOVNC_PORT", "6080"))
+    return f"http://127.0.0.1:{port}/vnc.html?autoconnect=1&resize=scale"
+
+
 def novnc_configured() -> bool:
     """Detect noVNC web assets and explicit enablement for the runtime."""
     if not _env_flag("HH_NOVNC_ENABLED"):
@@ -190,13 +196,12 @@ def open_login(
     resolved.ensure()
     if not chromium_installed():
         raise SessionError("chromium_missing")
-    novnc_port = int(os.getenv("HH_NOVNC_PORT", "6080"))
     report: dict[str, Any] = {
         "auth_session": "pending_operator",
         "browser_started": False,
         "detached": detach,
         "login_url": login_url,
-        "novnc_url": f"http://127.0.0.1:{novnc_port}/",
+        "novnc_url": novnc_public_url(),
         "profile_lock": ProfileLock(resolved.profile_dir).status(),
         "captcha_bypass": False,
     }

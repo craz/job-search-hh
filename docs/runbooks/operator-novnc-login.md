@@ -2,7 +2,8 @@
 
 Prerequisites: Compose service `hh` is healthy with Chromium/noVNC installed.
 
-1. Open noVNC only on the host loopback: http://127.0.0.1:6080/
+1. Open noVNC only on the host loopback:
+   http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale
 2. Start headed HH login (detached JSON returns immediately):
 
 ```bash
