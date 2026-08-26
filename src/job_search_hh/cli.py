@@ -28,6 +28,7 @@ from job_search_hh.oauth import (
 from job_search_hh.oauth_callback import oauth_acquire
 from job_search_hh.profile import account_profile
 from job_search_hh.providers import AuthenticatedHhApi, FixtureProvider, HttpHhApi
+from job_search_hh.resumes import list_resumes
 from job_search_hh.session import (
     SessionError,
     auth_status,
@@ -134,6 +135,13 @@ def build_parser() -> argparse.ArgumentParser:
     account_sub.add_parser(
         "status",
         help="Report normalized HH account from GET /me (no raw payload, no secrets)",
+    )
+
+    resumes = sub.add_parser("resumes", help="Product-facing HH own-resume list (browser RO)")
+    resumes_sub = resumes.add_subparsers(dest="resumes_command", required=True)
+    resumes_sub.add_parser(
+        "list",
+        help="List own resumes via authenticated browser session (ids+titles only)",
     )
 
     auth = sub.add_parser("auth", help="Operator authentication via noVNC")
@@ -354,6 +362,11 @@ def account_status_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=account_profile())
 
 
+def resumes_list_envelope() -> Envelope:
+    """Report normalized own-resume list via browser RO transport."""
+    return Envelope(schema_version=1, ok=True, data=list_resumes())
+
+
 def auth_status_envelope() -> Envelope:
     """Report auth marker without performing HH login."""
     return Envelope(schema_version=1, ok=True, data=auth_status())
@@ -468,6 +481,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = connection_status_envelope()
     elif args.command == "account" and args.account_command == "status":
         envelope = account_status_envelope()
+    elif args.command == "resumes" and args.resumes_command == "list":
+        envelope = resumes_list_envelope()
     elif args.command == "auth" and args.auth_command == "status":
         envelope = auth_status_envelope()
     elif args.command == "auth" and args.auth_command == "open-login":

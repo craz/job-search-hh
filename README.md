@@ -52,6 +52,7 @@ uv run job-search-hh apply limited --fixture path/to/apply_plan.json --i-authori
 uv run job-search-hh session status
 uv run job-search-hh connection status
 uv run job-search-hh account status
+uv run job-search-hh resumes list
 uv run job-search-hh auth status
 uv run job-search-hh auth open-login --detach
 uv run job-search-hh auth confirm --i-confirm-operator-login

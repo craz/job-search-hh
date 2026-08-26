@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from job_search_hh.connection import connection_status
 from job_search_hh.profile import account_profile
+from job_search_hh.resumes import list_resumes
 from job_search_hh.session import SessionError, clear_login, confirm_login, open_login
 
 
@@ -46,6 +47,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/v1/account":
             self._json(HTTPStatus.OK, account_profile())
+            return
+        if parsed.path == "/api/v1/resumes":
+            self._json(HTTPStatus.OK, list_resumes())
             return
         self._json(
             HTTPStatus.NOT_FOUND,
