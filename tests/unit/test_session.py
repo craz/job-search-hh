@@ -83,6 +83,23 @@ def test_open_login_and_confirm_mark_ready(tmp_path: Path, monkeypatch: pytest.M
     assert cleared["login_ready"] is False
 
 
+def test_confirm_login_stops_detached_browser_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
+    paths.ensure()
+    lock = ProfileLock(paths.profile_dir)
+    lock.acquire("login-browser")
+    pid_path = paths.state_dir / "login-browser.pid"
+    # Non-existent pid: kill is best-effort; lock must still release.
+    pid_path.write_text("1", encoding="utf-8")
+    confirmed = confirm_login(paths, confirmed=True)
+    assert confirmed["login_ready"] is True
+    assert not pid_path.exists()
+    assert lock.status() == "unlocked"
+
+
 def test_confirm_requires_explicit_flag(tmp_path: Path) -> None:
     paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
     with pytest.raises(SessionError, match="confirmation_required"):

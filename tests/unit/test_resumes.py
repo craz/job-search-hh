@@ -60,6 +60,24 @@ def test_login_wall_is_not_empty_success(tmp_path: Path, monkeypatch: pytest.Mon
     assert report["action"]["code"] == "open_login"
 
 
+def test_profile_locked_offers_confirm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+    from job_search_hh.session import ProfileLock
+
+    ProfileLock(paths.profile_dir).acquire("login-browser")
+
+    def boom(**_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("reader must not run while locked")
+
+    report = list_resumes(paths, page_reader=boom)
+    assert report["status"] == STATUS_UNAVAILABLE
+    assert report["code"] == "profile_locked"
+    assert report["action"]["code"] == "confirm_login"
+    assert report["items"] == []
+
+
 def test_permission_blocked_is_explicit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
     paths = _paths(tmp_path)

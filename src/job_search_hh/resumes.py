@@ -183,6 +183,7 @@ def list_resumes(
             **base,
             "status": STATUS_UNAVAILABLE,
             "code": "profile_locked",
+            "action": {"code": "confirm_login", "novnc_url": _novnc_url()},
         }
 
     reader = page_reader or _read_resumes_page

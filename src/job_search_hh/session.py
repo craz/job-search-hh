@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -247,13 +249,44 @@ def confirm_login(
     *,
     confirmed: bool,
 ) -> dict[str, Any]:
-    """Record operator confirmation that interactive HH login succeeded."""
+    """Record operator confirmation that interactive HH login succeeded.
+
+    Stops a detached login browser (if still running) so the profile lock is
+    released and later read-only resume scraping can reuse the same profile.
+    """
     if not confirmed:
         raise SessionError("confirmation_required")
     resolved = paths or SessionPaths.from_env()
     resolved.ensure()
+    _stop_detached_login_browser(resolved)
     write_auth_session(resolved, "present", source="operator_confirm")
     return auth_status(resolved)
+
+
+def _stop_detached_login_browser(paths: SessionPaths) -> None:
+    """Best-effort stop of ``auth open-login --detach`` child; never dumps secrets."""
+    pid_path = paths.state_dir / "login-browser.pid"
+    if not pid_path.exists():
+        ProfileLock(paths.profile_dir).release()
+        return
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        pid = 0
+    if pid > 0:
+        with contextlib.suppress(OSError):
+            os.kill(pid, 15)
+        for _ in range(20):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+            time.sleep(0.05)
+        with contextlib.suppress(OSError):
+            os.kill(pid, 9)
+    with contextlib.suppress(OSError):
+        pid_path.unlink()
+    ProfileLock(paths.profile_dir).release()
 
 
 def clear_login(paths: SessionPaths | None = None) -> dict[str, Any]:

@@ -18,6 +18,8 @@
 - Statuses: `available` (incl. empty), `not_authorized`, `permission_blocked`,
   `unavailable`
 - Login wall / missing browser session → **not** an empty successful list
+- Web maps `action.open_login` / `confirm_login` to product buttons
+  («Войти в HeadHunter» / «Я вошёл — показать резюме»)
 - Never dumps cookies, tokens, or raw HTML
 
 ## Non-scope
