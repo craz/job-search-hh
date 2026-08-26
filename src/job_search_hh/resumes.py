@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from job_search_hh.active_resume import attach_selection
 from job_search_hh.connection import connection_status
 from job_search_hh.session import (
     ProfileLock,
@@ -192,8 +193,27 @@ def list_resumes(
     timeout_seconds: float = 45.0,
 ) -> dict[str, Any]:
     """Return normalized own-resume list using browser session (not official API)."""
-    checked_at = _utc_now()
     resolved = paths or SessionPaths.from_env()
+    return attach_selection(
+        _list_resumes_raw(
+            resolved,
+            resumes_url=resumes_url,
+            page_reader=page_reader,
+            timeout_seconds=timeout_seconds,
+        ),
+        resolved,
+    )
+
+
+def _list_resumes_raw(
+    resolved: SessionPaths,
+    *,
+    resumes_url: str,
+    page_reader: ResumePageReader | None,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Browser RO list without selection annotation (used by set-active validation)."""
+    checked_at = _utc_now()
     connection = connection_status(resolved)
     connection_state = str(connection.get("status") or STATUS_UNAVAILABLE)
     auth = auth_status(resolved)

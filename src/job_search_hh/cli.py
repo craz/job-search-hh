@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from job_search_hh.active_resume import set_active_resume
 from job_search_hh.apply import ApplyError, dry_run_apply, limited_apply, load_apply_plan
 from job_search_hh.apply_transport import HttpApplyTransport
 from job_search_hh.capabilities import current_capabilities
@@ -28,9 +29,10 @@ from job_search_hh.oauth import (
 from job_search_hh.oauth_callback import oauth_acquire
 from job_search_hh.profile import account_profile
 from job_search_hh.providers import AuthenticatedHhApi, FixtureProvider, HttpHhApi
-from job_search_hh.resumes import list_resumes
+from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.session import (
     SessionError,
+    SessionPaths,
     auth_status,
     clear_login,
     confirm_login,
@@ -142,6 +144,20 @@ def build_parser() -> argparse.ArgumentParser:
     resumes_sub.add_parser(
         "list",
         help="List own resumes via authenticated browser session (ids+titles only)",
+    )
+    resumes_select = resumes_sub.add_parser(
+        "select",
+        help="Set one active HH resume by external_id (must be in current list)",
+    )
+    resumes_select.add_argument(
+        "--id",
+        required=True,
+        dest="resume_external_id",
+        help="HH resume external_id from resumes list",
+    )
+    resumes_sub.add_parser(
+        "clear",
+        help="Clear active HH resume selection (explicit none)",
     )
 
     auth = sub.add_parser("auth", help="Operator authentication via noVNC")
@@ -367,6 +383,29 @@ def resumes_list_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=list_resumes())
 
 
+def resumes_select_envelope(external_id: str | None) -> Envelope:
+    """Set or clear active resume; persists in HH state across restart."""
+    paths = SessionPaths.from_env()
+    list_report = _list_resumes_raw(
+        paths,
+        resumes_url="https://hh.ru/applicant/resumes",
+        page_reader=None,
+        timeout_seconds=45.0,
+    )
+    result = set_active_resume(paths, external_id, list_report=list_report)
+    if not result.get("ok"):
+        return Envelope(
+            schema_version=1,
+            ok=False,
+            data={
+                "code": result.get("code"),
+                "message": result.get("message"),
+                "resumes": result.get("resumes"),
+            },
+        )
+    return Envelope(schema_version=1, ok=True, data=result["resumes"])
+
+
 def auth_status_envelope() -> Envelope:
     """Report auth marker without performing HH login."""
     return Envelope(schema_version=1, ok=True, data=auth_status())
@@ -483,6 +522,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = account_status_envelope()
     elif args.command == "resumes" and args.resumes_command == "list":
         envelope = resumes_list_envelope()
+    elif args.command == "resumes" and args.resumes_command == "select":
+        envelope = resumes_select_envelope(str(args.resume_external_id))
+    elif args.command == "resumes" and args.resumes_command == "clear":
+        envelope = resumes_select_envelope(None)
     elif args.command == "auth" and args.auth_command == "status":
         envelope = auth_status_envelope()
     elif args.command == "auth" and args.auth_command == "open-login":

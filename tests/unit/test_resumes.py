@@ -125,9 +125,11 @@ def test_available_list_normalized(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert report["code"] == "ready"
     assert report["transport"] == "browser_readonly"
     assert report["items"] == [
-        {"external_id": "resumehash01", "title": "Product Manager"},
-        {"external_id": "resumehash02", "title": "Engineer"},
+        {"external_id": "resumehash01", "title": "Product Manager", "active": False},
+        {"external_id": "resumehash02", "title": "Engineer", "active": False},
     ]
+    assert report["selection"]["status"] == "none"
+    assert report["active_resume"] is None
 
 
 def test_empty_authorized_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

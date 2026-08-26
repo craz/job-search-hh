@@ -10,3 +10,5 @@ def test_api_publishes_resumes_path() -> None:
     text = api_path.read_text(encoding="utf-8")
     assert "/api/v1/resumes" in text
     assert "list_resumes" in text
+    assert "/api/v1/resumes/active" in text
+    assert "set_active_resume" in text

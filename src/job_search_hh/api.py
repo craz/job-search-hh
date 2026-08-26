@@ -9,10 +9,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
+from job_search_hh.active_resume import set_active_resume
 from job_search_hh.connection import connection_status
 from job_search_hh.profile import account_profile
-from job_search_hh.resumes import list_resumes
-from job_search_hh.session import SessionError, clear_login, confirm_login, open_login
+from job_search_hh.resumes import _list_resumes_raw, list_resumes
+from job_search_hh.session import SessionError, SessionPaths, clear_login, confirm_login, open_login
 
 
 def _secret_leak(payload: dict[str, Any]) -> bool:
@@ -56,8 +57,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             {"code": "not_found", "message": "Unknown path"},
         )
 
-    def do_POST(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
+    def _read_json_body(self) -> dict[str, Any] | None:
         length = int(self.headers.get("Content-Length") or "0")
         raw = self.rfile.read(length) if length > 0 else b"{}"
         try:
@@ -67,12 +67,56 @@ class ApiHandler(BaseHTTPRequestHandler):
                 HTTPStatus.BAD_REQUEST,
                 {"code": "invalid_request", "message": "Invalid JSON body"},
             )
-            return
+            return None
         if not isinstance(body, dict):
             self._json(
                 HTTPStatus.BAD_REQUEST,
                 {"code": "invalid_request", "message": "JSON object required"},
             )
+            return None
+        return body
+
+    def do_PUT(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/v1/resumes/active":
+            self._json(
+                HTTPStatus.NOT_FOUND,
+                {"code": "not_found", "message": "Unknown path"},
+            )
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        if "external_id" not in body:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {"code": "invalid_request", "message": "external_id is required (string or null)"},
+            )
+            return
+        external_id = body.get("external_id")
+        if external_id is not None and not isinstance(external_id, str):
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {"code": "invalid_request", "message": "external_id must be a string or null"},
+            )
+            return
+        paths = SessionPaths.from_env()
+        list_report = _list_resumes_raw(
+            paths,
+            resumes_url="https://hh.ru/applicant/resumes",
+            page_reader=None,
+            timeout_seconds=45.0,
+        )
+        result = set_active_resume(paths, external_id, list_report=list_report)
+        if not result.get("ok"):
+            self._json(HTTPStatus.CONFLICT, result)
+            return
+        self._json(HTTPStatus.OK, result["resumes"])
+
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        body = self._read_json_body()
+        if body is None:
             return
 
         try:
