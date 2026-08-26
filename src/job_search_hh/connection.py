@@ -43,8 +43,9 @@ def _action(
 def _novnc_url_if_configured(auth: dict[str, Any]) -> str | None:
     if not auth.get("novnc_configured"):
         return None
-    port = int(auth.get("novnc_port") or 6080)
-    return f"http://127.0.0.1:{port}/"
+    from job_search_hh.session import novnc_public_url
+
+    return novnc_public_url()
 
 
 def connection_status(paths: SessionPaths | None = None) -> dict[str, Any]:

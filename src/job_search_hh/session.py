@@ -207,6 +207,11 @@ def open_login(
     }
     if detach:
         write_auth_session(resolved, "pending_operator", source="auth_open_login")
+        from job_search_hh.browser import _clear_stale_chromium_singleton
+
+        _clear_stale_chromium_singleton(resolved.profile_dir)
+        log_path = resolved.state_dir / "login-browser.log"
+        log_handle = log_path.open("w", encoding="utf-8")
         # Child takes the profile lock in foreground mode.
         child = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
             [
@@ -220,15 +225,23 @@ def open_login(
                 login_url,
             ],
             start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
             env={
                 **os.environ,
                 "HH_STATE_DIR": str(resolved.state_dir),
                 "HH_PROFILE_DIR": str(resolved.profile_dir),
+                "DISPLAY": os.getenv("HH_DISPLAY") or os.getenv("DISPLAY") or ":99",
+                "HH_DISPLAY": os.getenv("HH_DISPLAY") or os.getenv("DISPLAY") or ":99",
             },
         )
+        log_handle.close()
         (resolved.state_dir / "login-browser.pid").write_text(str(child.pid), encoding="utf-8")
+        # Detached spawn used to claim success while Chromium died on a stale
+        # SingletonLock — verify the child is still alive briefly.
+        time.sleep(2.5)
+        if child.poll() is not None:
+            raise SessionError("browser_launch_failed")
         report["browser_started"] = True
         report["pid"] = child.pid
         return report
