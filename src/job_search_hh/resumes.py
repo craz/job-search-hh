@@ -16,6 +16,11 @@ from urllib.parse import urlparse
 
 from job_search_hh.active_resume import attach_selection
 from job_search_hh.connection import connection_status
+from job_search_hh.egress import (
+    classify_browser_transport_error,
+    egress_diagnostic,
+    egress_preflight_code,
+)
 from job_search_hh.session import (
     ProfileLock,
     SessionError,
@@ -250,6 +255,15 @@ def _list_resumes_raw(
             "action": {"code": "confirm_login", "novnc_url": _novnc_url()},
         }
 
+    preflight_code = egress_preflight_code()
+    if preflight_code:
+        return {
+            **base,
+            "status": STATUS_UNAVAILABLE,
+            "code": preflight_code,
+            "egress": egress_diagnostic(),
+        }
+
     reader = page_reader or _read_resumes_page
     try:
         lock.acquire("resumes-list")
@@ -267,12 +281,16 @@ def _list_resumes_raw(
             "status": STATUS_UNAVAILABLE,
             "code": str(error),
         }
-    except Exception:
-        return {
+    except Exception as error:
+        code = classify_browser_transport_error(error) or "browser_resume_read_failed"
+        payload: dict[str, Any] = {
             **base,
             "status": STATUS_UNAVAILABLE,
-            "code": "browser_resume_read_failed",
+            "code": code,
         }
+        if code == "browser_proxy_unavailable":
+            payload["egress"] = egress_diagnostic()
+        return payload
 
     if not isinstance(raw, dict):
         return {

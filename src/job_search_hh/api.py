@@ -12,7 +12,9 @@ from urllib.parse import urlparse
 from job_search_hh.active_resume import set_active_resume
 from job_search_hh.connection import connection_status
 from job_search_hh.core_linkage import sync_active_resume_link
+from job_search_hh.egress import egress_diagnostic, egress_preflight_code
 from job_search_hh.profile import account_profile
+from job_search_hh.recovery import with_recovery
 from job_search_hh.resume_content import read_resume_content
 from job_search_hh.resume_sync import sync_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
@@ -45,7 +47,25 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/health/ready":
-            self._json(HTTPStatus.OK, {"status": "ok", "component": "job-search-hh"})
+            egress = egress_diagnostic()
+            preflight_code = egress_preflight_code()
+            payload = {
+                "status": "ok" if not preflight_code else "degraded",
+                "component": "job-search-hh",
+                "egress": egress,
+            }
+            if preflight_code:
+                payload.update(
+                    {
+                        "code": preflight_code,
+                        "message": (
+                            "Local HH browser egress is unavailable; "
+                            "restart the workspace with make up."
+                        ),
+                    }
+                )
+            status = HTTPStatus.OK if not preflight_code else HTTPStatus.SERVICE_UNAVAILABLE
+            self._json(status, with_recovery(payload))
             return
         if parsed.path == "/api/v1/connection":
             self._json(HTTPStatus.OK, connection_status())

@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from job_search_hh.connection import connection_status
+from job_search_hh.egress import classify_browser_transport_error, egress_diagnostic
 from job_search_hh.recovery import with_recovery
 from job_search_hh.session import (
     ProfileLock,
@@ -337,14 +338,16 @@ def acquire_vacancies(
                 "code": str(error) or "transport_unavailable",
             }
         )
-    except Exception:
-        return with_recovery(
-            {
-                **report,
-                "status": STATUS_UNAVAILABLE,
-                "code": "browser_vacancy_read_failed",
-            }
-        )
+    except Exception as error:
+        code = classify_browser_transport_error(error) or "browser_vacancy_read_failed"
+        payload: dict[str, Any] = {
+            **report,
+            "status": STATUS_UNAVAILABLE,
+            "code": code,
+        }
+        if code == "browser_proxy_unavailable":
+            payload["egress"] = egress_diagnostic()
+        return with_recovery(payload)
 
     if not isinstance(raw, dict):
         return with_recovery(

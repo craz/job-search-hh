@@ -13,11 +13,18 @@ RECOVERY_NONE = "none"
 RECOVERY_REAUTH = "reauth"
 RECOVERY_CAPTCHA_OR_ACTION = "captcha_or_action_required"
 RECOVERY_EXTERNAL_LIMITATION = "external_limitation"
+RECOVERY_LOCAL_EGRESS = "local_egress_unavailable"
 RECOVERY_NETWORK = "network_failure"
 
 _STATUS_REAUTH = frozenset({"not_authorized", "expired"})
 _STATUS_ACTION = frozenset({"action_required"})
 _STATUS_EXTERNAL = frozenset({"permission_blocked"})
+_CODE_LOCAL_EGRESS = frozenset(
+    {
+        "browser_proxy_unavailable",
+        "local_egress_unavailable",
+    }
+)
 _CODE_NETWORK = frozenset(
     {
         "me_upstream_failure",
@@ -79,6 +86,8 @@ def classify_recovery(
         kind = RECOVERY_CAPTCHA_OR_ACTION
     elif code_value in _CODE_EXTERNAL or status_value in _STATUS_EXTERNAL:
         kind = RECOVERY_EXTERNAL_LIMITATION
+    elif code_value in _CODE_LOCAL_EGRESS:
+        kind = RECOVERY_LOCAL_EGRESS
     elif code_value in _CODE_NETWORK or code_value.startswith("me_http_"):
         kind = RECOVERY_NETWORK
     elif code_value in _CODE_REAUTH or status_value in _STATUS_REAUTH:

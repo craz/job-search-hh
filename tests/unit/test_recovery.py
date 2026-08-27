@@ -5,6 +5,7 @@ from __future__ import annotations
 from job_search_hh.recovery import (
     RECOVERY_CAPTCHA_OR_ACTION,
     RECOVERY_EXTERNAL_LIMITATION,
+    RECOVERY_LOCAL_EGRESS,
     RECOVERY_NETWORK,
     RECOVERY_NONE,
     RECOVERY_REAUTH,
@@ -51,6 +52,17 @@ def test_classify_external_and_network() -> None:
     assert (
         classify_recovery(status="unavailable", code="me_upstream_failure")["kind"]
         == RECOVERY_NETWORK
+    )
+
+
+def test_classify_local_egress_proxy_failure() -> None:
+    assert (
+        classify_recovery(status="unavailable", code="browser_proxy_unavailable")["kind"]
+        == RECOVERY_LOCAL_EGRESS
+    )
+    assert (
+        classify_recovery(status="degraded", code="browser_proxy_unavailable")["kind"]
+        == RECOVERY_LOCAL_EGRESS
     )
 
 

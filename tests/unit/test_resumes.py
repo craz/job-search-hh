@@ -177,3 +177,43 @@ def test_reader_failure_is_unavailable(tmp_path: Path, monkeypatch: pytest.Monke
     assert report["status"] == STATUS_UNAVAILABLE
     assert report["code"] == "browser_resume_read_failed"
     assert report["items"] == []
+
+
+def test_proxy_connect_failure_maps_to_local_egress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+
+    def proxy_fail(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError(
+            "Page.goto: net::ERR_PROXY_CONNECTION_FAILED at https://hh.ru/applicant/resumes"
+        )
+
+    report = list_resumes(paths, page_reader=proxy_fail)
+    assert report["status"] == STATUS_UNAVAILABLE
+    assert report["code"] == "browser_proxy_unavailable"
+    assert report["recovery"]["kind"] == "local_egress_unavailable"
+    assert report["egress"]["misconfigured_loopback"] is False
+
+
+def test_loopback_proxy_preflight_skips_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:2080")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+    called = {"n": 0}
+
+    def boom(**_kwargs: Any) -> dict[str, Any]:
+        called["n"] += 1
+        return {"kind": "ok", "items": []}
+
+    report = list_resumes(paths, page_reader=boom)
+    assert report["status"] == STATUS_UNAVAILABLE
+    assert report["code"] == "browser_proxy_unavailable"
+    assert report["recovery"]["kind"] == "local_egress_unavailable"
+    assert report["egress"]["misconfigured_loopback"] is True
+    assert called["n"] == 0
