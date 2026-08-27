@@ -27,6 +27,33 @@ def test_cli_exposes_read_only_vacancy_sync() -> None:
     assert args.per_page == 3
 
 
+def test_cli_exposes_vacancy_acquire_browser_transport() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "vacancies",
+            "acquire",
+            "--transport",
+            "browser",
+            "--text",
+            "python",
+            "--area",
+            "1",
+            "--max-pages",
+            "2",
+            "--detail-limit",
+            "1",
+            "--order",
+            "publication_time",
+        ]
+    )
+    assert args.vacancies_command == "acquire"
+    assert args.transport == "browser"
+    assert args.max_pages == 2
+    assert args.fetch_details is True
+    assert args.detail_limit == 1
+
+
 def test_cli_exposes_read_only_application_sync() -> None:
     parser = build_parser()
     fixture = parser.parse_args(["applications", "sync", "--fixture", "apps.json"])

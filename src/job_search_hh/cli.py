@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -29,7 +30,14 @@ from job_search_hh.oauth import (
 )
 from job_search_hh.oauth_callback import oauth_acquire
 from job_search_hh.profile import account_profile
-from job_search_hh.providers import AuthenticatedHhApi, FixtureProvider, HttpHhApi
+from job_search_hh.providers import (
+    AuthenticatedHhApi,
+    FixtureProvider,
+    HttpHhApi,
+    OfficialHhApiVacancyProvider,
+    ProviderError,
+    select_vacancy_transport,
+)
 from job_search_hh.resume_content import read_resume_content
 from job_search_hh.resume_sync import sync_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
@@ -43,6 +51,8 @@ from job_search_hh.session import (
     session_status,
 )
 from job_search_hh.sync import SyncError, sync_applications, sync_metrics, sync_vacancies
+from job_search_hh.vacancy_browser import BrowserHhVacancyProvider, acquire_vacancies
+from job_search_hh.vacancy_query import ExecutionPolicy, criteria_from_mapping
 
 
 @dataclass(frozen=True)
@@ -70,6 +80,65 @@ def build_parser() -> argparse.ArgumentParser:
         "--fixture",
         type=Path,
         help="Synthetic HH JSON fixture instead of the live public API",
+    )
+    acquire = vacancies_sub.add_parser(
+        "acquire",
+        help="Acquire vacancy summaries/details without Core writes (explicit transport)",
+    )
+    acquire.add_argument(
+        "--transport",
+        default="browser",
+        help="Explicit transport: browser | official | fixture (no silent fallback)",
+    )
+    acquire.add_argument("--text", default="python", help="Search text criterion")
+    acquire.add_argument("--area", default=None, help="HH area id")
+    acquire.add_argument("--salary", type=int, default=None, help="Minimum salary filter")
+    acquire.add_argument("--experience", default=None, help="HH experience id")
+    acquire.add_argument("--employment", default=None, help="HH employment id")
+    acquire.add_argument("--schedule", default=None, help="HH schedule id")
+    acquire.add_argument("--search-field", default=None, dest="search_field")
+    acquire.add_argument(
+        "--only-with-salary",
+        action="store_true",
+        dest="only_with_salary",
+        help="Map only_with_salary=true onto HH Web search",
+    )
+    acquire.add_argument(
+        "--order",
+        default="publication_time",
+        help="Execution order_by (not SearchProfile)",
+    )
+    acquire.add_argument(
+        "--max-pages",
+        type=int,
+        default=1,
+        dest="max_pages",
+        help="Execution max_pages bound",
+    )
+    acquire.add_argument(
+        "--page-size",
+        type=int,
+        default=None,
+        dest="page_size",
+        help="Unsupported on HH Web; reported in unsupported_mapping when set",
+    )
+    acquire.add_argument(
+        "--fetch-details",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fetch detail pages for first N summaries (default: true)",
+    )
+    acquire.add_argument(
+        "--detail-limit",
+        type=int,
+        default=1,
+        dest="detail_limit",
+        help="Max detail pages to open after list-first discovery",
+    )
+    acquire.add_argument(
+        "--fixture",
+        type=Path,
+        help="JSON fixture for --transport fixture (page_reader payload)",
     )
 
     applications = sub.add_parser("applications", help="Read-only application operations")
@@ -284,6 +353,85 @@ def vacancy_sync_envelope(args: argparse.Namespace) -> Envelope:
     except SyncError as error:
         return Envelope(schema_version=1, ok=False, data={"error": str(error)})
     return Envelope(schema_version=1, ok=True, data=report)
+
+
+def vacancy_acquire_envelope(args: argparse.Namespace) -> Envelope:
+    """Acquire vacancy source DTOs; never writes HH or Core."""
+    try:
+        transport = select_vacancy_transport(str(args.transport))
+    except ProviderError as error:
+        return Envelope(schema_version=1, ok=False, data={"error": str(error)})
+
+    criteria = criteria_from_mapping(
+        {
+            "text": args.text,
+            "area": args.area,
+            "salary": args.salary,
+            "experience": args.experience,
+            "employment": args.employment,
+            "schedule": args.schedule,
+            "search_field": args.search_field,
+            "only_with_salary": True if args.only_with_salary else None,
+        }
+    )
+    execution = ExecutionPolicy(
+        order=str(args.order) if args.order else None,
+        max_pages=max(1, int(args.max_pages)),
+        page_size=args.page_size,
+    )
+
+    if transport == "official_http_api":
+        settings = Settings.from_env()
+        report = OfficialHhApiVacancyProvider(
+            settings.hh_api_url, settings.user_agent, settings.timeout_seconds
+        ).acquire(criteria, execution)
+        return Envelope(
+            schema_version=1,
+            ok=str(report.get("status")) == "available",
+            data=report,
+        )
+
+    if transport == "fixture":
+        if args.fixture is None:
+            return Envelope(schema_version=1, ok=False, data={"error": "fixture_required"})
+        payload = json.loads(Path(args.fixture).read_text(encoding="utf-8"))
+
+        def reader(**_kwargs: Any) -> dict[str, Any]:
+            if not isinstance(payload, dict):
+                return {"kind": "invalid", "pages": [], "details": []}
+            return payload
+
+        # Fixture path uses a synthetic confirmed session; no live Chromium.
+        from job_search_hh.session import confirm_login as _confirm
+
+        tmp = Path(tempfile.mkdtemp(prefix="hh-vacancy-fixture-"))
+        paths = SessionPaths(state_dir=tmp / "state", profile_dir=tmp / "profile")
+        _confirm(paths, confirmed=True)
+        report = acquire_vacancies(
+            criteria,
+            execution,
+            paths=paths,
+            page_reader=reader,
+            fetch_details=bool(args.fetch_details),
+            detail_limit=int(args.detail_limit),
+        )
+        return Envelope(
+            schema_version=1,
+            ok=str(report.get("status")) in {"available", "partial"},
+            data=report,
+        )
+
+    report = BrowserHhVacancyProvider().acquire(
+        criteria,
+        execution,
+        fetch_details=bool(args.fetch_details),
+        detail_limit=int(args.detail_limit),
+    )
+    return Envelope(
+        schema_version=1,
+        ok=str(report.get("status")) in {"available", "partial"},
+        data=report,
+    )
 
 
 def application_sync_envelope(args: argparse.Namespace) -> Envelope:
@@ -553,6 +701,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = capabilities_envelope()
     elif args.command == "vacancies" and args.vacancies_command == "sync":
         envelope = vacancy_sync_envelope(args)
+    elif args.command == "vacancies" and args.vacancies_command == "acquire":
+        envelope = vacancy_acquire_envelope(args)
     elif args.command == "applications" and args.applications_command == "sync":
         envelope = application_sync_envelope(args)
     elif args.command == "metrics" and args.metrics_command == "sync":

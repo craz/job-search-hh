@@ -1,0 +1,73 @@
+{
+  "kind": "ok",
+  "pages": [
+    {
+      "page": 0,
+      "url": "https://hh.ru/search/vacancy?text=python&page=0",
+      "status": "ok",
+      "code": "ready",
+      "items": [
+        {
+          "external_id": "1001",
+          "title": "Python Engineer",
+          "url": "https://hh.ru/vacancy/1001",
+          "employer_name": "Acme LLC",
+          "employer_id": "42",
+          "salary_text": "от 200 000 ₽",
+          "area_text": "Москва",
+          "source_page": 0,
+          "source_url": "https://hh.ru/search/vacancy?text=python&page=0"
+        }
+      ],
+      "meta": {
+        "found_text": "Найдено 2 вакансии «python»",
+        "pager_labels": ["1", "2"],
+        "observed_page_size": 1
+      }
+    },
+    {
+      "page": 1,
+      "url": "https://hh.ru/search/vacancy?text=python&page=1",
+      "status": "ok",
+      "code": "ready",
+      "items": [
+        {
+          "external_id": "1002",
+          "title": "Backend Developer",
+          "url": "https://hh.ru/vacancy/1002",
+          "employer_name": "Beta",
+          "area_text": "Санкт-Петербург",
+          "source_page": 1,
+          "source_url": "https://hh.ru/search/vacancy?text=python&page=1"
+        }
+      ],
+      "meta": {
+        "found_text": "Найдено 2 вакансии «python»",
+        "pager_labels": ["1", "2"],
+        "observed_page_size": 1
+      }
+    }
+  ],
+  "details": [
+    {
+      "external_id": "1001",
+      "status": "ok",
+      "code": "ready",
+      "content": {
+        "external_id": "1001",
+        "title": "Python Engineer",
+        "url": "https://hh.ru/vacancy/1001",
+        "employer_id": "42",
+        "employer_name": "Acme LLC",
+        "description": "Полное описание вакансии для scoring. Требуется Python и SQL.",
+        "salary_text": "от 200 000 ₽",
+        "area_text": "Москва",
+        "employment_text": "Полная занятость",
+        "schedule_text": "График: 5/2",
+        "work_format_text": "Формат работы: удалённо",
+        "experience_text": "1–3 года",
+        "archived": false
+      }
+    }
+  ]
+}

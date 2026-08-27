@@ -85,6 +85,70 @@ class HttpHhApi:
         return [item for item in items if isinstance(item, dict)]
 
 
+class OfficialHhApiVacancyProvider:
+    """Explicit official HTTP vacancy transport (currently capability-blocked / 403).
+
+    Never silent-falls back to browser — callers must select BrowserHhVacancyProvider.
+    """
+
+    transport = "official_http_api"
+    capability = "unsupported_403"
+
+    def __init__(self, base_url: str, user_agent: str, timeout_seconds: float) -> None:
+        self._http = HttpHhApi(base_url, user_agent, timeout_seconds)
+
+    def search(self, *, text: str, per_page: int) -> list[dict[str, Any]]:
+        return self._http.search(text=text, per_page=per_page)
+
+    def acquire(self, criteria: Any, execution: Any = None) -> dict[str, Any]:
+        """Attempt official list; surface ProviderError codes without Core writes."""
+        del execution
+        from job_search_hh.vacancy_query import SearchCriteria as _SC
+
+        text = "python"
+        if isinstance(criteria, _SC):
+            text = (criteria.text or "").strip() or "python"
+        try:
+            items = self.search(text=text, per_page=5)
+        except ProviderError as error:
+            return {
+                "transport": self.transport,
+                "capability": self.capability,
+                "status": "unavailable",
+                "code": str(error),
+                "summaries": [],
+                "details": [],
+                "hh_writes": False,
+                "core_ingestion": False,
+            }
+        return {
+            "transport": self.transport,
+            "capability": "available",
+            "status": "available",
+            "code": "ready",
+            "summaries": items,
+            "details": [],
+            "hh_writes": False,
+            "core_ingestion": False,
+        }
+
+
+# Legacy alias for vacancies sync scaffold.
+HttpHhApiVacancyProvider = OfficialHhApiVacancyProvider
+
+
+def select_vacancy_transport(name: str) -> str:
+    """Validate explicit vacancy transport selection."""
+    normalized = (name or "").strip().casefold()
+    if normalized in {"browser", "browser_readonly", "browser-hh"}:
+        return "browser_readonly"
+    if normalized in {"official", "official_http_api", "api", "http"}:
+        return "official_http_api"
+    if normalized == "fixture":
+        return "fixture"
+    raise ProviderError("unsupported_vacancy_transport")
+
+
 def _negotiation_state_id(item: dict[str, Any]) -> str:
     state = item.get("state")
     if isinstance(state, dict):

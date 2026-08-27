@@ -22,9 +22,15 @@ _CODE_NETWORK = frozenset(
     {
         "me_upstream_failure",
         "browser_resume_read_failed",
+        "browser_vacancy_read_failed",
+        "search_page_failed",
+        "vacancy_detail_failed",
+        "page_parse_failed",
         "connection_read_failed",
         "network_failure",
         "upstream_failure",
+        "transport_unavailable",
+        "partial_pagination",
     }
 )
 _CODE_CAPTCHA = frozenset(
@@ -39,6 +45,7 @@ _CODE_EXTERNAL = frozenset(
     {
         "me_forbidden",
         "browser_resume_forbidden",
+        "browser_vacancy_forbidden",
         "permission_denied",
     }
 )

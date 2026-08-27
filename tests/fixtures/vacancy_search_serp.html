@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Search fixture</title></head>
+<body>
+  <h1 data-qa="vacancies-total-found">Найдено 2 вакансии «python»</h1>
+  <div data-qa="vacancy-serp__vacancy">
+    <a data-qa="serp-item__title" href="/vacancy/1001">
+      <span data-qa="serp-item__title-text">Python Engineer</span>
+    </a>
+    <span data-qa="vacancy-serp__vacancy-work-experience-between1And3"></span>
+    <span data-qa="vacancy-label-work-schedule-remote"></span>
+    <a href="/employer/42"><span data-qa="vacancy-serp__vacancy-employer-text">Acme LLC</span></a>
+    <span data-qa="vacancy-serp__vacancy-address">Москва</span>
+    <span data-qa="vacancy-serp__vacancy-compensation">от 200 000 ₽</span>
+    <span data-qa="vacancy-serp-item-activity">Сегодня</span>
+  </div>
+  <div data-qa="vacancy-serp__vacancy">
+    <a data-qa="serp-item__title" href="/vacancy/1001?dup=1">
+      <span data-qa="serp-item__title-text">Python Engineer duplicate id</span>
+    </a>
+    <a href="/employer/42"><span data-qa="vacancy-serp__vacancy-employer-text">Acme LLC</span></a>
+    <span data-qa="vacancy-serp__vacancy-address">Москва</span>
+  </div>
+  <div data-qa="vacancy-serp__vacancy">
+    <a data-qa="serp-item__title" href="/vacancy/1002">
+      <span data-qa="serp-item__title-text">Backend Developer</span>
+    </a>
+    <span data-qa="vacancy-serp__vacancy-employer-text">Beta</span>
+    <span data-qa="vacancy-serp__vacancy-address">Санкт-Петербург</span>
+  </div>
+  <a data-qa="pager-page" href="/search/vacancy?page=0">1</a>
+  <a data-qa="pager-page" href="/search/vacancy?page=1">2</a>
+</body>
+</html>
