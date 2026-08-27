@@ -141,12 +141,15 @@ class CoreClient:
     def start_search_run(
         self,
         *,
-        search_profile_id: str,
+        search_profile_id: str | None = None,
+        acquisition_kind: str = "profile_search",
         execution: dict[str, Any] | None = None,
         candidate_context_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a running SearchRun with immutable snapshots."""
-        payload: dict[str, Any] = {"search_profile_id": search_profile_id}
+        payload: dict[str, Any] = {"acquisition_kind": acquisition_kind}
+        if search_profile_id is not None:
+            payload["search_profile_id"] = search_profile_id
         if execution is not None:
             payload["execution"] = execution
         if candidate_context_snapshot is not None:

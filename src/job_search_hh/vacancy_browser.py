@@ -264,6 +264,8 @@ def acquire_vacancies(
     fetch_details: bool = True,
     detail_limit: int = 1,
     timeout_seconds: float = 60.0,
+    page_url_builder: Callable[[int], str] | None = None,
+    serp_guard: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Bounded list-first vacancy acquisition via browser RO transport."""
     resolved = paths or SessionPaths.from_env()
@@ -274,7 +276,16 @@ def acquire_vacancies(
         max_pages=max_pages,
         page_size=policy.page_size,
     )
-    first_map = map_search_query(criteria, policy, page=0)
+    if page_url_builder is not None:
+        first_url = page_url_builder(0)
+        first_map = QueryMapping(url=first_url, query={}, unsupported=[], page_size_note=None)
+        page_urls = [(index, page_url_builder(index)) for index in range(max_pages)]
+    else:
+        first_map = map_search_query(criteria, policy, page=0)
+        page_urls = [
+            (index, map_search_query(criteria, policy, page=index).url)
+            for index in range(max_pages)
+        ]
     report = _base_report(criteria=criteria, execution=policy, mapping=first_map)
     report["connection_status"] = str(
         (connection_status(resolved) or {}).get("status") or STATUS_UNAVAILABLE
@@ -303,9 +314,6 @@ def acquire_vacancies(
             }
         )
 
-    page_urls = [
-        (index, map_search_query(criteria, policy, page=index).url) for index in range(max_pages)
-    ]
     reader = page_reader or _read_vacancy_pages
 
     try:
@@ -483,6 +491,31 @@ def acquire_vacancies(
                 "code": "page_parse_failed",
             }
         )
+
+    if serp_guard is not None:
+        first_ok = next((p for p in pages if str(p.get("status")) == "ok"), {})
+        raw_first_items = first_ok.get("items")
+        first_items: list[Any] = raw_first_items if isinstance(raw_first_items, list) else []
+        guard_result = serp_guard(
+            final_url=str(first_ok.get("url") or first_map.url),
+            found_text=found_text,
+            card_count=len(first_items),
+        )
+        report["serp_guard"] = guard_result
+        if not isinstance(guard_result, dict) or not guard_result.get("ok"):
+            report["summaries"] = []
+            report["details"] = []
+            return with_recovery(
+                {
+                    **report,
+                    "status": STATUS_UNAVAILABLE,
+                    "code": str((guard_result or {}).get("code") or "resume_search_page_mismatch"),
+                }
+            )
+        if guard_result.get("source_total") is not None:
+            pagination["source_total"] = guard_result.get("source_total")
+            report["pagination"] = pagination
+
     if partial or detail_failures > 0:
         return with_recovery(
             {

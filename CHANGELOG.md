@@ -7,6 +7,9 @@ Semantic Versioning.
 
 ### Added
 
+- R2.2.5 primary `resume_suitable` orchestration: `POST /api/v1/vacancies/suitable`
+  — active resume → suitable SERP (`order_by=publication_time`) → SERP guard →
+  detail → Core ingest; `source_total` preserved separately from processed count.
 - R2.2.4 SearchRun orchestration: `POST /api/v1/vacancies/search` and
   `vacancies search` CLI — SearchProfile → browser acquire → Core ingest →
   SearchRunItem → finalize (immutable snapshots; no fake page_size).

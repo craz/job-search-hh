@@ -52,24 +52,31 @@ class FakeCore:
     def start_search_run(
         self,
         *,
-        search_profile_id: str,
+        search_profile_id: str | None = None,
+        acquisition_kind: str = "profile_search",
         execution: dict[str, Any] | None = None,
         candidate_context_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         run_id = str(uuid.uuid4())
-        criteria = {
-            "text": self.profile["text"],
-            "area_id": self.profile["area_id"],
-            "salary": self.profile.get("salary"),
-            "experience": self.profile.get("experience"),
-            "employment": self.profile.get("employment"),
-            "schedule": self.profile.get("schedule"),
-            "search_field": self.profile.get("search_field"),
-            "only_with_salary": self.profile.get("only_with_salary"),
-        }
+        if acquisition_kind == "resume_suitable":
+            criteria: dict[str, Any] = {}
+            profile_id = None
+        else:
+            criteria = {
+                "text": self.profile["text"],
+                "area_id": self.profile["area_id"],
+                "salary": self.profile.get("salary"),
+                "experience": self.profile.get("experience"),
+                "employment": self.profile.get("employment"),
+                "schedule": self.profile.get("schedule"),
+                "search_field": self.profile.get("search_field"),
+                "only_with_salary": self.profile.get("only_with_salary"),
+            }
+            profile_id = search_profile_id
         run = {
             "id": run_id,
-            "search_profile_id": search_profile_id,
+            "search_profile_id": profile_id,
+            "acquisition_kind": acquisition_kind,
             "status": "running",
             "criteria_snapshot": criteria,
             "execution_snapshot": dict(execution or {}),
@@ -79,6 +86,7 @@ class FakeCore:
             "updated_count": 0,
             "unchanged_count": 0,
             "error_count": 0,
+            "source_total": None,
             "error_code": None,
             "recovery_hint": None,
         }
@@ -122,6 +130,8 @@ class FakeCore:
         run["status"] = payload["status"]
         run["error_code"] = payload.get("error_code")
         run["recovery_hint"] = payload.get("recovery_hint")
+        if "source_total" in payload:
+            run["source_total"] = payload.get("source_total")
         run["created_count"] = sum(1 for i in items if i.get("outcome") == "created")
         run["updated_count"] = sum(1 for i in items if i.get("outcome") == "updated")
         run["unchanged_count"] = sum(1 for i in items if i.get("outcome") == "unchanged")
@@ -129,6 +139,13 @@ class FakeCore:
         run["found_count"] = len(items)
         run["finished_at"] = "2026-08-27T12:00:00Z"
         return dict(run)
+
+    def get_candidate_context(self) -> dict[str, Any]:
+        return {
+            "hh_resume_link": None,
+            "resume_content": None,
+            "profile_version": None,
+        }
 
     def get_search_run(self, run_id: str) -> dict[str, Any]:
         return dict(self.runs[run_id])

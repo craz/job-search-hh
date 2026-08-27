@@ -1,10 +1,11 @@
-# SearchRun orchestration (R2.2.4)
+# SearchRun orchestration (R2.2.4 + R2.2.5 resume_suitable)
 
 ## User Story
 
 ```text
-Как оператор / Web (R2.2.5),
-Я хочу запустить bounded vacancy search от persisted SearchProfile через HH,
+Как оператор / Web,
+Я хочу запустить bounded vacancy acquisition через HH
+(primary: подходящие к активному резюме; secondary: SearchProfile),
 Чтобы один SearchRun прошёл acquire → detail → Core ingest → SearchRunItem → finalize.
 ```
 
@@ -16,15 +17,32 @@
 
 ```text
 HH HTTP/CLI
-  → search_run_orchestration.run_vacancy_search
-      → CoreClient (profile + start run)
-      → VacancyProvider / acquire_vacancies (immutable snapshots)
+  → run_resume_suitable_search  OR  run_vacancy_search
+      → CoreClient (start run with acquisition_kind)
+      → acquire_vacancies (page_url_builder + optional serp_guard)
       → vacancy_detail_to_ingest mapper
       → Core ingest + SearchRunItem
-      → Core finalize (counters recomputed from items)
+      → Core finalize (counters + optional source_total)
 ```
 
 ## HTTP
+
+### Primary — resume suitable (R2.2.5)
+
+`POST /api/v1/vacancies/suitable`
+
+```json
+{ "execution": { "order": "publication_time", "max_pages": 1 } }
+```
+
+- Active resume from accepted HH context (never hardcoded).
+- SERP URL: `resume=` + `from=resumelist` + `hhtmFromLabel=vacancies_for_resume_button`
+  + `hhtmFrom=resume_list` + `order_by` (default `publication_time`).
+- Mandatory **SERP guard** before ingest: URL resume id, suitable heading,
+  result structure → else `resume_search_page_mismatch` (no ingest, failed run).
+- Response includes `source_total` (HH total) separate from processed `found_count`.
+
+### Secondary — profile search (R2.2.4)
 
 `POST /api/v1/vacancies/search`
 
@@ -40,8 +58,7 @@ HH HTTP/CLI
 
 - `page_size` is **rejected** (unsupported Web browser knob).
 - Response includes `search_run`, `acquisition`, `items`, terminal `status`.
-- Observability of snapshots/counters/items also via Core
-  `GET /api/v1/search-runs/{id}` and `.../items`.
+- Observability via Core `GET /api/v1/search-runs/{id}` and `.../items`.
 
 ## CLI
 
@@ -49,10 +66,9 @@ HH HTTP/CLI
 
 ## Snapshot rule
 
-1. Read SearchProfile once.
-2. `POST` SearchRun with `criteria_snapshot` + `execution_snapshot` (`transport=browser`).
-3. Execute acquire **only** from those immutable snapshots.
-4. Profile mutations after start do not affect the running SearchRun.
+1. Start SearchRun with `acquisition_kind` + immutable snapshots.
+2. Execute acquire **only** from those snapshots / resume URL builder.
+3. Profile mutations after start do not affect a running `profile_search` run.
 
 ## Semantics
 
@@ -62,7 +78,7 @@ HH HTTP/CLI
 | Bound completed (`max_pages_reached`) | `success` |
 | Detail/ingest item errors after some work | `partial` |
 | Page failure after successful page(s) | `partial` |
-| First-page / login / CAPTCHA / transport before work | `failed` |
+| First-page / login / CAPTCHA / transport / SERP guard before work | `failed` |
 
 - Within one run, each `source_external_id` is processed once (no 409-as-normal).
 - Detail failure → item `outcome=error`, `vacancy_id` null; other items continue.
@@ -77,4 +93,5 @@ HH HTTP/CLI
 
 ## Non-scope
 
-Web CTA/editor, Scoring/Ollama, fuzzy dedupe, scheduled search, R2.2.5, R2.3.
+Web CTA polish beyond R2.2.5, Scoring/Ollama, fuzzy dedupe, scheduled search,
+manual-search staging import, R2.2.A, R2.3.
