@@ -125,3 +125,11 @@ class CoreClient:
         if status is not None:
             payload["status"] = status
         return self._request("PUT", "/api/v1/candidate-context/hh-resume-link", payload=payload)
+
+    def create_resume_version(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ingest allowlisted resume snapshot into Core (R2.1.3)."""
+        return self._request("POST", "/api/v1/resume-versions", payload=payload)
+
+    def get_resume_version(self, resume_version_id: str) -> dict[str, Any]:
+        """Read full ResumeVersion body from Core."""
+        return self._request("GET", f"/api/v1/resume-versions/{resume_version_id}")

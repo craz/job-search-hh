@@ -14,6 +14,7 @@ from job_search_hh.connection import connection_status
 from job_search_hh.core_linkage import sync_active_resume_link
 from job_search_hh.profile import account_profile
 from job_search_hh.resume_content import read_resume_content
+from job_search_hh.resume_sync import sync_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.session import SessionError, SessionPaths, clear_login, confirm_login, open_login
 
@@ -161,6 +162,23 @@ class ApiHandler(BaseHTTPRequestHandler):
                 report = clear_login()
                 report["connection"] = connection_status()
                 self._json(HTTPStatus.OK, report)
+                return
+            if parsed.path == "/api/v1/resumes/sync":
+                external_id = body.get("external_id")
+                if external_id is not None and not isinstance(external_id, str):
+                    self._json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "code": "invalid_request",
+                            "message": "external_id must be a string when provided",
+                        },
+                    )
+                    return
+                report = sync_resume_content(
+                    external_resume_id=external_id if isinstance(external_id, str) else None
+                )
+                status = HTTPStatus.OK if report.get("ok") else HTTPStatus.CONFLICT
+                self._json(status, report)
                 return
         except SessionError as error:
             self._json(

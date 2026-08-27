@@ -14,3 +14,5 @@ def test_api_publishes_resumes_path() -> None:
     assert "set_active_resume" in text
     assert "read_resume_content" in text
     assert "/content" in text
+    assert "sync_resume_content" in text
+    assert "/api/v1/resumes/sync" in text
