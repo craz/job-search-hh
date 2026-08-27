@@ -30,6 +30,7 @@ from job_search_hh.oauth import (
 from job_search_hh.oauth_callback import oauth_acquire
 from job_search_hh.profile import account_profile
 from job_search_hh.providers import AuthenticatedHhApi, FixtureProvider, HttpHhApi
+from job_search_hh.resume_content import read_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.session import (
     SessionError,
@@ -159,6 +160,16 @@ def build_parser() -> argparse.ArgumentParser:
     resumes_sub.add_parser(
         "clear",
         help="Clear active HH resume selection (explicit none)",
+    )
+    resumes_content = resumes_sub.add_parser(
+        "content",
+        help="Extract allowlisted own-resume detail via browser RO (no Core write)",
+    )
+    resumes_content.add_argument(
+        "--id",
+        required=True,
+        dest="resume_content_external_id",
+        help="HH resume external_id to open as /resume/{id}",
     )
 
     auth = sub.add_parser("auth", help="Operator authentication via noVNC")
@@ -384,6 +395,13 @@ def resumes_list_envelope() -> Envelope:
     return Envelope(schema_version=1, ok=True, data=list_resumes())
 
 
+def resumes_content_envelope(external_id: str) -> Envelope:
+    """Extract allowlisted resume detail; does not ingest into Core."""
+    report = read_resume_content(external_id)
+    ok = report.get("status") == "available"
+    return Envelope(schema_version=1, ok=ok, data=report)
+
+
 def resumes_select_envelope(external_id: str | None) -> Envelope:
     """Set or clear active resume; persists in HH state across restart."""
     paths = SessionPaths.from_env()
@@ -538,6 +556,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = resumes_select_envelope(str(args.resume_external_id))
     elif args.command == "resumes" and args.resumes_command == "clear":
         envelope = resumes_select_envelope(None)
+    elif args.command == "resumes" and args.resumes_command == "content":
+        envelope = resumes_content_envelope(str(args.resume_content_external_id))
     elif args.command == "auth" and args.auth_command == "status":
         envelope = auth_status_envelope()
     elif args.command == "auth" and args.auth_command == "open-login":

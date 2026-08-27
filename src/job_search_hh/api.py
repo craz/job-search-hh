@@ -13,6 +13,7 @@ from job_search_hh.active_resume import set_active_resume
 from job_search_hh.connection import connection_status
 from job_search_hh.core_linkage import sync_active_resume_link
 from job_search_hh.profile import account_profile
+from job_search_hh.resume_content import read_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.session import SessionError, SessionPaths, clear_login, confirm_login, open_login
 
@@ -53,6 +54,13 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/v1/resumes":
             self._json(HTTPStatus.OK, list_resumes())
             return
+        if parsed.path.startswith("/api/v1/resumes/") and parsed.path.endswith("/content"):
+            # /api/v1/resumes/{external_id}/content — allowlist RO extract only
+            parts = [p for p in parsed.path.split("/") if p]
+            # ['api', 'v1', 'resumes', '{id}', 'content']
+            if len(parts) == 5 and parts[3]:
+                self._json(HTTPStatus.OK, read_resume_content(parts[3]))
+                return
         self._json(
             HTTPStatus.NOT_FOUND,
             {"code": "not_found", "message": "Unknown path"},
