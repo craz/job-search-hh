@@ -34,7 +34,7 @@ def test_normalize_maps_hh_search_item_to_core_payload() -> None:
     assert idempotency_key("42") == "hh:vacancy:42"
 
 
-def test_normalize_falls_back_to_company_name_identity() -> None:
+def test_normalize_falls_back_to_vacancy_scoped_company_identity() -> None:
     payload = normalize_vacancy(
         {
             "id": "9",
@@ -44,7 +44,7 @@ def test_normalize_falls_back_to_company_name_identity() -> None:
         }
     )
 
-    assert payload["company_external_id"] == "name:solo co"
+    assert payload["company_external_id"] == "vacancy:9:employer"
     assert "description" not in payload
 
 
@@ -109,7 +109,7 @@ def test_vacancy_detail_to_ingest_maps_hh_dto_fields() -> None:
     assert "salary_text" not in payload
 
 
-def test_vacancy_detail_falls_back_to_name_identity_when_employer_id_missing() -> None:
+def test_vacancy_detail_falls_back_to_vacancy_scoped_company_identity() -> None:
     payload = vacancy_detail_to_ingest(
         {
             "external_id": "9",
@@ -118,4 +118,26 @@ def test_vacancy_detail_falls_back_to_name_identity_when_employer_id_missing() -
             "employer_name": "Solo Co",
         }
     )
-    assert payload["company_external_id"] == "name:solo co"
+    assert payload["company_external_id"] == "vacancy:9:employer"
+
+
+def test_same_employer_name_without_id_does_not_share_company_identity() -> None:
+    a = vacancy_detail_to_ingest(
+        {
+            "external_id": "100",
+            "title": "A",
+            "url": "https://hh.ru/vacancy/100",
+            "employer_name": "Ромашка",
+        }
+    )
+    b = vacancy_detail_to_ingest(
+        {
+            "external_id": "200",
+            "title": "B",
+            "url": "https://hh.ru/vacancy/200",
+            "employer_name": "Ромашка",
+        }
+    )
+    assert a["company_external_id"] == "vacancy:100:employer"
+    assert b["company_external_id"] == "vacancy:200:employer"
+    assert a["company_external_id"] != b["company_external_id"]

@@ -17,6 +17,27 @@ def _text(value: object) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def company_external_id_for_vacancy(
+    *,
+    vacancy_external_id: str,
+    employer_id: str | None,
+) -> str:
+    """Resolve Company identity for one HH vacancy.
+
+    Stable HH employer id → reuse globally as ``(hh, <employer_id>)``.
+    Missing employer id → vacancy-scoped synthetic id
+    ``vacancy:<vacancy_external_id>:employer`` so same display names never merge
+    across different vacancies. No fuzzy/name-based Company identity.
+    """
+    stable = _text(employer_id)
+    if stable:
+        return stable
+    vacancy_id = _text(vacancy_external_id)
+    if not vacancy_id:
+        raise NormalizeError("incomplete_vacancy_company")
+    return f"vacancy:{vacancy_id}:employer"
+
+
 def description_from_item(item: dict[str, Any]) -> str | None:
     """Prefer full description; fall back to public search snippets."""
     direct = _text(item.get("description"))
@@ -38,11 +59,12 @@ def normalize_vacancy(item: dict[str, Any]) -> dict[str, Any]:
     raw_employer = item.get("employer")
     employer: dict[str, Any] = raw_employer if isinstance(raw_employer, dict) else {}
     company_name = _text(employer.get("name") or item.get("company_name"))
-    company_external_id = _text(employer.get("id") or item.get("company_external_id"))
     if not vacancy_id or not title or not url or not company_name:
         raise NormalizeError("incomplete_vacancy")
-    if not company_external_id:
-        company_external_id = f"name:{company_name.casefold()}"
+    company_external_id = company_external_id_for_vacancy(
+        vacancy_external_id=vacancy_id,
+        employer_id=_text(employer.get("id") or item.get("company_external_id")) or None,
+    )
     payload: dict[str, Any] = {
         "company_name": company_name,
         "company_external_id": company_external_id,
@@ -60,20 +82,19 @@ def normalize_vacancy(item: dict[str, Any]) -> dict[str, Any]:
 def vacancy_detail_to_ingest(detail: dict[str, Any]) -> dict[str, Any]:
     """Map HhVacancyDetail (or compatible dict) to Core VacancyIngest payload.
 
-    Does not invent absent fields. Without a stable employer id, falls back to
-    ``name:{casefold(company_name)}`` — same risk as legacy normalize_vacancy:
-    distinct employers that share a display name may collide. Prefer
-    ``employer_id`` whenever R2.2.2 extraction provides it.
+    Does not invent absent fields. Without a stable employer id uses
+    vacancy-scoped Company identity (never global name-based merge).
     """
     external_id = _text(detail.get("external_id") or detail.get("id"))
     title = _text(detail.get("title") or detail.get("name"))
     url = _text(detail.get("url") or detail.get("alternate_url"))
     company_name = _text(detail.get("employer_name") or detail.get("company_name"))
-    company_external_id = _text(detail.get("employer_id") or detail.get("company_external_id"))
     if not external_id or not title or not url or not company_name:
         raise NormalizeError("incomplete_vacancy_detail")
-    if not company_external_id:
-        company_external_id = f"name:{company_name.casefold()}"
+    company_external_id = company_external_id_for_vacancy(
+        vacancy_external_id=external_id,
+        employer_id=_text(detail.get("employer_id") or detail.get("company_external_id")) or None,
+    )
 
     payload: dict[str, Any] = {
         "company_name": company_name,
