@@ -57,6 +57,51 @@ def normalize_vacancy(item: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def vacancy_detail_to_ingest(detail: dict[str, Any]) -> dict[str, Any]:
+    """Map HhVacancyDetail (or compatible dict) to Core VacancyIngest payload.
+
+    Does not invent absent fields. Without a stable employer id, falls back to
+    ``name:{casefold(company_name)}`` — same risk as legacy normalize_vacancy:
+    distinct employers that share a display name may collide. Prefer
+    ``employer_id`` whenever R2.2.2 extraction provides it.
+    """
+    external_id = _text(detail.get("external_id") or detail.get("id"))
+    title = _text(detail.get("title") or detail.get("name"))
+    url = _text(detail.get("url") or detail.get("alternate_url"))
+    company_name = _text(detail.get("employer_name") or detail.get("company_name"))
+    company_external_id = _text(detail.get("employer_id") or detail.get("company_external_id"))
+    if not external_id or not title or not url or not company_name:
+        raise NormalizeError("incomplete_vacancy_detail")
+    if not company_external_id:
+        company_external_id = f"name:{company_name.casefold()}"
+
+    payload: dict[str, Any] = {
+        "company_name": company_name,
+        "company_external_id": company_external_id,
+        "source": SOURCE,
+        "external_id": external_id,
+        "title": title,
+        "url": url,
+    }
+    optional_text = (
+        ("description", "description"),
+        ("salary_text", "salary_text"),
+        ("area_text", "area_text"),
+        ("employment_text", "employment_text"),
+        ("schedule_text", "schedule_text"),
+        ("work_format_text", "work_format_text"),
+        ("experience_text", "experience_text"),
+        ("published_text", "published_text"),
+    )
+    for src_key, dst_key in optional_text:
+        value = _text(detail.get(src_key))
+        if value:
+            payload[dst_key] = value
+    if isinstance(detail.get("archived"), bool):
+        payload["archived"] = detail["archived"]
+    return payload
+
+
 def idempotency_key(external_id: str) -> str:
     """Stable replay key for one HH vacancy identity."""
     return f"hh:vacancy:{external_id}"
