@@ -41,6 +41,7 @@ from job_search_hh.providers import (
 from job_search_hh.resume_content import read_resume_content
 from job_search_hh.resume_sync import sync_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
+from job_search_hh.search_run_orchestration import run_vacancy_search
 from job_search_hh.session import (
     SessionError,
     SessionPaths,
@@ -139,6 +140,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--fixture",
         type=Path,
         help="JSON fixture for --transport fixture (page_reader payload)",
+    )
+    search = vacancies_sub.add_parser(
+        "search",
+        help="Orchestrate SearchRun: profile → browser acquire → Core ingest → finalize",
+    )
+    search.add_argument(
+        "--search-profile-id",
+        required=True,
+        dest="search_profile_id",
+        help="Persisted Core SearchProfile id",
+    )
+    search.add_argument(
+        "--order",
+        default="publication_time",
+        help="Execution order (stored on SearchRun.execution_snapshot)",
+    )
+    search.add_argument(
+        "--max-pages",
+        type=int,
+        default=1,
+        dest="max_pages",
+        help="Bounded browser pagination (not SearchProfile)",
     )
 
     applications = sub.add_parser("applications", help="Read-only application operations")
@@ -353,6 +376,20 @@ def vacancy_sync_envelope(args: argparse.Namespace) -> Envelope:
     except SyncError as error:
         return Envelope(schema_version=1, ok=False, data={"error": str(error)})
     return Envelope(schema_version=1, ok=True, data=report)
+
+
+def vacancy_search_envelope(args: argparse.Namespace) -> Envelope:
+    """Run HH-owned SearchRun orchestration (writes Core; never HH POST)."""
+    report = run_vacancy_search(
+        search_profile_id=str(args.search_profile_id),
+        max_pages=max(1, min(int(args.max_pages), 20)),
+        order=str(args.order or "publication_time"),
+    )
+    return Envelope(
+        schema_version=1,
+        ok=str(report.get("status")) in {"success", "partial"},
+        data=report,
+    )
 
 
 def vacancy_acquire_envelope(args: argparse.Namespace) -> Envelope:
@@ -703,6 +740,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         envelope = vacancy_sync_envelope(args)
     elif args.command == "vacancies" and args.vacancies_command == "acquire":
         envelope = vacancy_acquire_envelope(args)
+    elif args.command == "vacancies" and args.vacancies_command == "search":
+        envelope = vacancy_search_envelope(args)
     elif args.command == "applications" and args.applications_command == "sync":
         envelope = application_sync_envelope(args)
     elif args.command == "metrics" and args.metrics_command == "sync":

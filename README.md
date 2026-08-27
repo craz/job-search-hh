@@ -42,6 +42,8 @@ make bootstrap
 make test
 make smoke
 CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh vacancies sync --text "python" --per-page 3
+# SearchRun orchestration (R2.2.4): persisted SearchProfile → browser → Core ingest
+CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh vacancies search --search-profile-id '<uuid>' --max-pages 1
 CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh applications sync --fixture path/to/apps.json
 CORE_API_URL=http://127.0.0.1:8000 uv run job-search-hh metrics sync --fixture path/to/metrics.json
 # live authenticated read (no HH write): login_ready + access token required

@@ -133,3 +133,42 @@ class CoreClient:
     def get_resume_version(self, resume_version_id: str) -> dict[str, Any]:
         """Read full ResumeVersion body from Core."""
         return self._request("GET", f"/api/v1/resume-versions/{resume_version_id}")
+
+    def get_search_profile(self, profile_id: str) -> dict[str, Any]:
+        """Read one SearchProfile by id."""
+        return self._request("GET", f"/api/v1/search-profiles/{profile_id}")
+
+    def start_search_run(
+        self,
+        *,
+        search_profile_id: str,
+        execution: dict[str, Any] | None = None,
+        candidate_context_snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a running SearchRun with immutable snapshots."""
+        payload: dict[str, Any] = {"search_profile_id": search_profile_id}
+        if execution is not None:
+            payload["execution"] = execution
+        if candidate_context_snapshot is not None:
+            payload["candidate_context_snapshot"] = candidate_context_snapshot
+        return self._request("POST", "/api/v1/search-runs", payload=payload)
+
+    def get_search_run(self, run_id: str) -> dict[str, Any]:
+        """Read one SearchRun including snapshots and counters."""
+        return self._request("GET", f"/api/v1/search-runs/{run_id}")
+
+    def list_search_run_items(self, run_id: str) -> dict[str, Any]:
+        """List SearchRunItems for one run."""
+        return self._request("GET", f"/api/v1/search-runs/{run_id}/items")
+
+    def add_search_run_item(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Persist one SearchRunItem while the run is still running."""
+        return self._request("POST", f"/api/v1/search-runs/{run_id}/items", payload=payload)
+
+    def finalize_search_run(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Finalize SearchRun to a terminal status; Core recomputes counters."""
+        return self._request("POST", f"/api/v1/search-runs/{run_id}/finalize", payload=payload)
+
+    def ingest_vacancy(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Identity-safe Vacancy upsert (created|updated|unchanged)."""
+        return self._request("POST", "/api/v1/vacancies/ingest", payload=payload)

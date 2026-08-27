@@ -16,6 +16,7 @@ from job_search_hh.profile import account_profile
 from job_search_hh.resume_content import read_resume_content
 from job_search_hh.resume_sync import sync_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
+from job_search_hh.search_run_orchestration import run_vacancy_search
 from job_search_hh.session import SessionError, SessionPaths, clear_login, confirm_login, open_login
 
 
@@ -178,6 +179,67 @@ class ApiHandler(BaseHTTPRequestHandler):
                     external_resume_id=external_id if isinstance(external_id, str) else None
                 )
                 status = HTTPStatus.OK if report.get("ok") else HTTPStatus.CONFLICT
+                self._json(status, report)
+                return
+            if parsed.path == "/api/v1/vacancies/search":
+                profile_id = body.get("search_profile_id")
+                if not isinstance(profile_id, str) or not profile_id.strip():
+                    self._json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "code": "invalid_request",
+                            "message": "search_profile_id is required (string)",
+                        },
+                    )
+                    return
+                execution = body.get("execution")
+                if execution is not None and not isinstance(execution, dict):
+                    self._json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "code": "invalid_request",
+                            "message": "execution must be an object when provided",
+                        },
+                    )
+                    return
+                exec_obj = execution if isinstance(execution, dict) else {}
+                if "page_size" in exec_obj and exec_obj.get("page_size") is not None:
+                    self._json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "code": "unsupported_execution",
+                            "message": (
+                                "page_size is not a supported Web browser execution knob; "
+                                "omit it and use max_pages/order only"
+                            ),
+                        },
+                    )
+                    return
+                order = (
+                    str(exec_obj.get("order") or "publication_time").strip() or "publication_time"
+                )
+                try:
+                    max_pages = int(exec_obj.get("max_pages") or 1)
+                except (TypeError, ValueError):
+                    self._json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "code": "invalid_request",
+                            "message": "execution.max_pages must be an integer",
+                        },
+                    )
+                    return
+                max_pages = max(1, min(max_pages, 20))
+                report = run_vacancy_search(
+                    search_profile_id=profile_id.strip(),
+                    max_pages=max_pages,
+                    order=order,
+                )
+                status = (
+                    HTTPStatus.OK
+                    if str(report.get("status")) in {"success", "partial"}
+                    else HTTPStatus.CONFLICT
+                )
                 self._json(status, report)
                 return
         except SessionError as error:

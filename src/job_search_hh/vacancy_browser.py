@@ -198,7 +198,7 @@ def _read_vacancy_pages(
                         summaries_for_detail.append(str(item["external_id"]))
 
             if fetch_details and summaries_for_detail:
-                limit = max(0, min(int(detail_limit), 20))
+                limit = max(0, min(int(detail_limit), 200))
                 for external_id in summaries_for_detail[:limit]:
                     detail_url = DEFAULT_VACANCY_URL_TEMPLATE.format(external_id=external_id)
                     try:
@@ -317,7 +317,7 @@ def acquire_vacancies(
                 detail_ids=[],
                 timeout_ms=int(timeout_seconds * 1000),
                 fetch_details=bool(fetch_details),
-                detail_limit=max(0, min(int(detail_limit), 20)),
+                detail_limit=max(0, min(int(detail_limit), 200)),
             )
         finally:
             lock.release()
@@ -348,36 +348,6 @@ def acquire_vacancies(
         )
 
     wall = str(raw.get("kind") or "")
-    if wall == "login_required":
-        return with_recovery(
-            {
-                **report,
-                "status": STATUS_NOT_AUTHORIZED,
-                "code": "browser_session_not_logged_in",
-                "action": {"code": "open_login", "novnc_url": _novnc_url()},
-                "pages": list(raw.get("pages") or []),
-            }
-        )
-    if wall == "captcha_or_action_required":
-        return with_recovery(
-            {
-                **report,
-                "status": STATUS_ACTION_REQUIRED,
-                "code": "browser_captcha_or_action_required",
-                "action": {"code": "confirm_login", "novnc_url": _novnc_url()},
-                "pages": list(raw.get("pages") or []),
-            }
-        )
-    if wall == "permission_blocked":
-        return with_recovery(
-            {
-                **report,
-                "status": STATUS_PERMISSION_BLOCKED,
-                "code": "browser_vacancy_forbidden",
-                "pages": list(raw.get("pages") or []),
-            }
-        )
-
     pages = [p for p in list(raw.get("pages") or []) if isinstance(p, dict)]
     summaries: list[HhVacancySummary] = []
     seen_ids: set[str] = set()
@@ -414,14 +384,48 @@ def acquire_vacancies(
             summaries.append(item)  # type: ignore[arg-type]
 
     details = [d for d in list(raw.get("details") or []) if isinstance(d, dict)]
+    report["summaries"] = summaries
+    report["details"] = details
+
+    if wall == "login_required" and ok_pages == 0:
+        return with_recovery(
+            {
+                **report,
+                "status": STATUS_NOT_AUTHORIZED,
+                "code": "browser_session_not_logged_in",
+                "action": {"code": "open_login", "novnc_url": _novnc_url()},
+            }
+        )
+    if wall == "captcha_or_action_required" and ok_pages == 0:
+        return with_recovery(
+            {
+                **report,
+                "status": STATUS_ACTION_REQUIRED,
+                "code": "browser_captcha_or_action_required",
+                "action": {"code": "confirm_login", "novnc_url": _novnc_url()},
+            }
+        )
+    if wall == "permission_blocked" and ok_pages == 0:
+        return with_recovery(
+            {
+                **report,
+                "status": STATUS_PERMISSION_BLOCKED,
+                "code": "browser_vacancy_forbidden",
+            }
+        )
 
     pages_fetched = len(pages)
     max_pages_reached = pages_fetched >= max_pages and not exhausted
-    # If last successful page was full and we stopped due to max_pages, not exhausted.
     if ok_pages and observed_sizes and observed_sizes[-1] == 0:
         exhausted = True
-    partial = failed_pages > 0 and ok_pages > 0
+    partial = (failed_pages > 0 and ok_pages > 0) or wall in {
+        "login_required",
+        "captcha_or_action_required",
+        "permission_blocked",
+    }
     detail_failures = sum(1 for d in details if str(d.get("status")) != "ok")
+    if detail_failures > 0 and (ok_pages > 0 or summaries):
+        partial = True
 
     pagination = {
         "pages_fetched": pages_fetched,
@@ -435,8 +439,33 @@ def acquire_vacancies(
         "detail_failures": detail_failures,
     }
     report["pagination"] = pagination
-    report["summaries"] = summaries
-    report["details"] = details
+
+    if wall == "login_required":
+        return with_recovery(
+            {
+                **report,
+                "status": STATUS_PARTIAL,
+                "code": "browser_session_not_logged_in",
+                "action": {"code": "open_login", "novnc_url": _novnc_url()},
+            }
+        )
+    if wall == "captcha_or_action_required":
+        return with_recovery(
+            {
+                **report,
+                "status": STATUS_PARTIAL,
+                "code": "browser_captcha_or_action_required",
+                "action": {"code": "confirm_login", "novnc_url": _novnc_url()},
+            }
+        )
+    if wall == "permission_blocked":
+        return with_recovery(
+            {
+                **report,
+                "status": STATUS_PARTIAL,
+                "code": "browser_vacancy_forbidden",
+            }
+        )
 
     if ok_pages == 0 and failed_pages > 0:
         return with_recovery(
@@ -459,7 +488,7 @@ def acquire_vacancies(
             {
                 **report,
                 "status": STATUS_PARTIAL,
-                "code": "partial_pagination" if partial else "vacancy_detail_failed",
+                "code": "partial_pagination" if failed_pages else "vacancy_detail_failed",
             }
         )
     if not summaries:

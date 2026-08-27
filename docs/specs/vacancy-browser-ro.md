@@ -24,5 +24,5 @@
 
 ## Non-scope
 
-SearchRun orchestration, SearchRunItem, Core Vacancy upsert/content_hash,
 Web CTA, Scoring, CAPTCHA bypass, private HH endpoints from browser traffic.
+SearchRun orchestration is covered in `search-run-orchestration.md` (R2.2.4).

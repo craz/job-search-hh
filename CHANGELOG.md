@@ -7,7 +7,9 @@ Semantic Versioning.
 
 ### Added
 
-- Read-only HH vacancy sync into Core (`vacancies sync` CLI, fixture or public API).
+- R2.2.4 SearchRun orchestration: `POST /api/v1/vacancies/search` and
+  `vacancies search` CLI — SearchProfile → browser acquire → Core ingest →
+  SearchRunItem → finalize (immutable snapshots; no fake page_size).
 - Fixture-based HH application sync into Core (`applications sync --fixture`).
 - Fixture-based daily metrics sync into Core (`metrics sync --fixture`).
 - Apply dry-run CLI that audits `would_send` without HH submit or Core writes.
