@@ -16,6 +16,7 @@ from job_search_hh.config import Settings
 from job_search_hh.core_client import CoreClient, CoreError
 from job_search_hh.recovery import with_recovery
 from job_search_hh.resume_content import ResumeDetailReader, read_resume_content
+from job_search_hh.resume_file_download import ResumeDownloadReader, download_resume_file
 from job_search_hh.session import SessionPaths
 
 STATUS_AVAILABLE = "available"
@@ -25,6 +26,7 @@ STATUS_PERMISSION_BLOCKED = "permission_blocked"
 STATUS_ACTION_REQUIRED = "action_required"
 
 ContentReader = Callable[..., dict[str, Any]]
+FileDownloader = Callable[..., dict[str, Any]]
 
 
 def _utc_now() -> str:
@@ -36,8 +38,10 @@ def sync_resume_content(
     external_resume_id: str | None = None,
     paths: SessionPaths | None = None,
     content_reader: ContentReader | None = None,
+    file_downloader: FileDownloader | None = None,
     core: CoreClient | None = None,
     page_reader: ResumeDetailReader | None = None,
+    download_reader: ResumeDownloadReader | None = None,
     timeout_seconds: float = 45.0,
 ) -> dict[str, Any]:
     """Extract active (or explicit) HH resume content and ingest into Core.
@@ -51,8 +55,10 @@ def sync_resume_content(
             external_resume_id=external_resume_id,
             paths=paths,
             content_reader=content_reader,
+            file_downloader=file_downloader,
             core=core,
             page_reader=page_reader,
+            download_reader=download_reader,
             timeout_seconds=timeout_seconds,
         )
     )
@@ -63,8 +69,10 @@ def _sync_resume_content_raw(
     external_resume_id: str | None,
     paths: SessionPaths | None,
     content_reader: ContentReader | None,
+    file_downloader: FileDownloader | None,
     core: CoreClient | None,
     page_reader: ResumeDetailReader | None,
+    download_reader: ResumeDownloadReader | None,
     timeout_seconds: float,
 ) -> dict[str, Any]:
     resolved = paths or SessionPaths.from_env()
@@ -78,6 +86,7 @@ def _sync_resume_content_raw(
         "checked_at": checked_at,
         "extract": None,
         "ingest": None,
+        "file": None,
         "candidate_context": None,
         "action": {"code": "none"},
     }
@@ -172,6 +181,54 @@ def _sync_resume_content_raw(
         version_id = resume_version.get("id")
         content_hash = resume_version.get("content_hash")
 
+    file_report: dict[str, Any] = {"ok": False, "status": STATUS_UNAVAILABLE, "code": "not_attempted"}
+    if version_id:
+        downloader = file_downloader or download_resume_file
+        if file_downloader is None:
+            file_result = downloader(
+                target_id,
+                resolved,
+                page_reader=download_reader,
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            file_result = downloader(target_id)
+        if file_result.get("ok"):
+            try:
+                artifact = client.create_resume_artifact(
+                    str(version_id),
+                    data=file_result["data"],
+                    mime_type=str(file_result.get("mime_type") or "application/octet-stream"),
+                    filename=str(file_result.get("original_filename") or "resume"),
+                    captured_at=str(file_result.get("captured_at") or checked_at),
+                )
+                artifact_row = artifact.get("artifact") if isinstance(artifact, dict) else None
+                file_report = {
+                    "ok": True,
+                    "status": STATUS_AVAILABLE,
+                    "code": "stored" if artifact.get("created") else "unchanged",
+                    "artifact_id": artifact_row.get("id") if isinstance(artifact_row, dict) else None,
+                    "mime_type": file_result.get("mime_type"),
+                    "original_filename": file_result.get("original_filename"),
+                    "size_bytes": file_result.get("size_bytes"),
+                }
+                raw_context = artifact.get("candidate_context") if isinstance(artifact, dict) else None
+                if isinstance(raw_context, dict):
+                    candidate_context = raw_context
+            except CoreError as error:
+                file_report = {
+                    "ok": False,
+                    "status": STATUS_UNAVAILABLE,
+                    "code": "core_artifact_failed",
+                    "message": str(error)[:300],
+                }
+        else:
+            file_report = {
+                "ok": False,
+                "status": file_result.get("status") or STATUS_UNAVAILABLE,
+                "code": file_result.get("code") or "download_failed",
+            }
+
     return {
         **base,
         "status": STATUS_AVAILABLE,
@@ -183,5 +240,6 @@ def _sync_resume_content_raw(
             "resume_version_id": version_id,
             "content_hash": content_hash,
         },
+        "file": file_report,
         "candidate_context": candidate_context,
     }

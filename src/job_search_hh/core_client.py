@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Protocol
 
@@ -129,6 +130,49 @@ class CoreClient:
     def create_resume_version(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Ingest allowlisted resume snapshot into Core (R2.1.3)."""
         return self._request("POST", "/api/v1/resume-versions", payload=payload)
+
+    def create_resume_artifact(
+        self,
+        resume_version_id: str,
+        *,
+        data: bytes,
+        mime_type: str,
+        filename: str,
+        captured_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload auxiliary HH resume file bytes for an existing ResumeVersion."""
+        import uuid
+
+        boundary = f"----JobSearchBoundary{uuid.uuid4().hex}"
+        body = bytearray()
+        body.extend(f"--{boundary}\r\n".encode())
+        disposition = f'form-data; name="file"; filename="{filename}"'
+        body.extend(f"Content-Disposition: {disposition}\r\n".encode())
+        body.extend(f"Content-Type: {mime_type}\r\n\r\n".encode())
+        body.extend(data)
+        body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode())
+        query = f"?captured_at={urllib.parse.quote(captured_at)}" if captured_at else ""
+        request = urllib.request.Request(
+            f"{self.base_url}/api/v1/resume-versions/{resume_version_id}/artifacts{query}",
+            data=bytes(body),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                result = json.load(response)
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")
+            raise CoreError(f"http_{error.code}:{detail}") from error
+        except (OSError, urllib.error.URLError, ValueError) as error:
+            raise CoreError(str(error)) from error
+        if not isinstance(result, dict):
+            raise CoreError("invalid_core_response")
+        return result
 
     def get_resume_version(self, resume_version_id: str) -> dict[str, Any]:
         """Read full ResumeVersion body from Core."""

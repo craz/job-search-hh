@@ -16,6 +16,7 @@ from job_search_hh.egress import egress_diagnostic, egress_preflight_code
 from job_search_hh.profile import account_profile
 from job_search_hh.recovery import with_recovery
 from job_search_hh.resume_content import read_resume_content
+from job_search_hh.resume_file_download import download_resume_file
 from job_search_hh.resume_sync import sync_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.search_run_orchestration import run_resume_suitable_search, run_vacancy_search
