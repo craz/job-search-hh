@@ -316,25 +316,48 @@ def test_malformed_search_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 def test_html_fixtures_extract_with_playwright() -> None:
-    pytest.importorskip("playwright.sync_api")
-    from playwright.sync_api import sync_playwright
+    """Exercise real Playwright extractors against HTML fixtures over http://.
 
-    search_html = (FIXTURES / "vacancy_search_serp.html").as_uri()
-    detail_html = (FIXTURES / "vacancy_detail.html").as_uri()
+    file:// pages have a null origin; History API and realistic /vacancy/<id>
+    URLs are unreliable there. Serve fixtures from a loopback HTTP server so the
+    extractor reads location.href under a normal browser origin.
+    """
+    pytest.importorskip("playwright.sync_api")
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from playwright.sync_api import sync_playwright
+    from threading import Thread
+
+    class _FixtureHandler(SimpleHTTPRequestHandler):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, directory=str(FIXTURES), **kwargs)
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.startswith("/vacancy/"):
+                self.path = "/vacancy_detail.html"
+            super().do_GET()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHandler)
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}"
+    search_url = f"{base}/vacancy_search_serp.html"
+    detail_url = f"{base}/vacancy/1001"
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
             page = browser.new_page()
-            page.goto(search_html)
+            page.goto(search_url)
             raw = extract_search_page(page)
-            normalized = normalize_search_payload(raw, page=0, source_url=search_html)
+            normalized = normalize_search_payload(raw, page=0, source_url=search_url)
             assert [i["external_id"] for i in normalized["items"]] == ["1001", "1002"]
             assert normalized["items"][0]["employer_name"] == "Acme LLC"
             assert normalized["items"][0]["salary_text"]
 
-            page.goto(detail_html)
-            # Fake path so URL parser can recover id from evaluate href; set via evaluate.
-            page.evaluate("() => history.replaceState({}, '', '/vacancy/1001')")
+            page.goto(detail_url)
             detail_raw = extract_detail_page(page)
             detail = normalize_detail_payload(detail_raw)
             assert detail["kind"] == "ok"
@@ -346,6 +369,9 @@ def test_html_fixtures_extract_with_playwright() -> None:
         if "Executable doesn't exist" in message or "playwright install" in message:
             pytest.skip(f"playwright chromium unavailable: {message}")
         raise
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_allowlist_detail_rejects_raw_dom() -> None:
