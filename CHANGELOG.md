@@ -7,7 +7,11 @@ Semantic Versioning.
 
 ### Added
 
+- R2.4.1b vacancy source-status check: `GET /api/v1/vacancies/{external_id}/source-status`
+  — browser RO detail extract reports `active` / `archived` / `unknown`; auth,
+  CAPTCHA and transport failures never yield `archived`; no Core writes.
 - R2.2.5 primary `resume_suitable` orchestration: `POST /api/v1/vacancies/suitable`
+
   — active resume → suitable SERP (`order_by=publication_time`) → SERP guard →
   detail → Core ingest; `source_total` preserved separately from processed count.
 - R2.2.4 SearchRun orchestration: `POST /api/v1/vacancies/search` and

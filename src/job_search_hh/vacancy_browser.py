@@ -256,6 +256,61 @@ def _read_vacancy_pages(
     return {"kind": "ok", "pages": pages_out, "details": details_out}
 
 
+def _read_single_vacancy_detail(
+    *,
+    profile_dir: Any,
+    vacancy_url: str,
+    timeout_ms: int,
+) -> dict[str, Any]:
+    """Open persistent Chromium and extract one vacancy detail page (no SERP).
+
+    Reuses ``extract_detail_page`` / ``normalize_detail_payload``. Returns a
+    wall ``kind`` without content, or ``kind=ok`` with allowlisted content.
+    Does not write to HH or Core.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as error:  # pragma: no cover
+        raise SessionError("playwright_missing") from error
+
+    display = (os.getenv("DISPLAY") or os.getenv("HH_DISPLAY") or "").strip()
+    env: dict[str, str | float | bool] = {key: value for key, value in os.environ.items()}
+    if display:
+        env["DISPLAY"] = display
+
+    with sync_playwright() as playwright:
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir=str(profile_dir),
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            env=env if display else None,
+        )
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(vacancy_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.wait_for_timeout(min(2_000, max(500, timeout_ms // 25)))
+            raw_detail = extract_detail_page(page)
+        finally:
+            context.close()
+
+    if not isinstance(raw_detail, dict):
+        return {"kind": "invalid", "content": None}
+
+    kind = str(raw_detail.get("kind") or "invalid")
+    if kind in {
+        "login_required",
+        "captcha_or_action_required",
+        "permission_blocked",
+    }:
+        return {"kind": kind, "content": None}
+
+    normalized = normalize_detail_payload(raw_detail)
+    return {
+        "kind": str(normalized.get("kind") or "invalid"),
+        "content": normalized.get("content"),
+    }
+
+
 def acquire_vacancies(
     criteria: SearchCriteria,
     execution: ExecutionPolicy | None = None,

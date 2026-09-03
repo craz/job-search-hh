@@ -16,11 +16,11 @@ from job_search_hh.egress import egress_diagnostic, egress_preflight_code
 from job_search_hh.profile import account_profile
 from job_search_hh.recovery import with_recovery
 from job_search_hh.resume_content import read_resume_content
-from job_search_hh.resume_file_download import download_resume_file
 from job_search_hh.resume_sync import sync_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.search_run_orchestration import run_resume_suitable_search, run_vacancy_search
 from job_search_hh.session import SessionError, SessionPaths, clear_login, confirm_login, open_login
+from job_search_hh.vacancy_source_status import check_vacancy_source_status
 
 
 def _secret_leak(payload: dict[str, Any]) -> bool:
@@ -83,6 +83,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             # ['api', 'v1', 'resumes', '{id}', 'content']
             if len(parts) == 5 and parts[3]:
                 self._json(HTTPStatus.OK, read_resume_content(parts[3]))
+                return
+        if parsed.path.startswith("/api/v1/vacancies/") and parsed.path.endswith("/source-status"):
+            # /api/v1/vacancies/{external_id}/source-status — RO archive/active check
+            parts = [p for p in parsed.path.split("/") if p]
+            # ['api', 'v1', 'vacancies', '{id}', 'source-status']
+            if len(parts) == 5 and parts[3]:
+                self._json(HTTPStatus.OK, check_vacancy_source_status(parts[3]))
                 return
         self._json(
             HTTPStatus.NOT_FOUND,

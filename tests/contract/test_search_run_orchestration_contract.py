@@ -7,6 +7,13 @@ from pathlib import Path
 from job_search_hh.cli import build_parser
 
 
+def test_api_publishes_vacancy_source_status_path() -> None:
+    api_path = Path(__file__).resolve().parents[2] / "src" / "job_search_hh" / "api.py"
+    text = api_path.read_text(encoding="utf-8")
+    assert "/source-status" in text
+    assert "check_vacancy_source_status" in text
+
+
 def test_api_publishes_vacancies_search_path() -> None:
     api_path = Path(__file__).resolve().parents[2] / "src" / "job_search_hh" / "api.py"
     text = api_path.read_text(encoding="utf-8")
