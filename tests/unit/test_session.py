@@ -112,3 +112,46 @@ def test_open_login_requires_chromium(tmp_path: Path, monkeypatch: pytest.Monkey
     paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
     with pytest.raises(SessionError, match="chromium_missing"):
         open_login(paths, launcher=FakeLauncher())
+
+
+def test_profile_lock_releases_orphaned_when_chrome_absent(tmp_path: Path) -> None:
+    paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
+    paths.ensure()
+    lock = ProfileLock(paths.profile_dir)
+    lock.acquire("vacancy-browser-ro")
+    assert lock.status() == "locked"
+    assert lock.release_orphaned() is True
+    assert lock.status() == "unlocked"
+    lock.acquire("auth-open-login")
+    assert lock.status() == "locked"
+
+
+def test_detached_open_login_requires_interactive_display(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setenv("HH_NOVNC_ENABLED", "1")
+    monkeypatch.setenv("HH_NOVNC_WEB", str(tmp_path))
+    (tmp_path / "index.html").write_text("ok", encoding="utf-8")
+    monkeypatch.delenv("HH_PROXY", raising=False)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("http_proxy", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    monkeypatch.setattr("job_search_hh.session.interactive_display_ready", lambda **_kw: False)
+    paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
+    with pytest.raises(SessionError, match="novnc_unavailable"):
+        open_login(paths, detach=True)
+
+
+def test_detached_open_login_rejects_loopback_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setenv("HH_NOVNC_ENABLED", "1")
+    monkeypatch.setenv("HH_NOVNC_WEB", str(tmp_path))
+    (tmp_path / "index.html").write_text("ok", encoding="utf-8")
+    monkeypatch.setenv("HH_PROXY", "http://127.0.0.1:2080")
+    paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
+    with pytest.raises(SessionError, match="browser_proxy_unavailable"):
+        open_login(paths, detach=True)

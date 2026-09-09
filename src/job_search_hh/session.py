@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -20,6 +21,7 @@ from job_search_hh.browser import (
     BrowserLauncher,
     PlaywrightBrowserLauncher,
 )
+from job_search_hh.egress import egress_preflight_code
 
 
 class SessionError(Exception):
@@ -61,11 +63,32 @@ class SessionPaths:
         return self.state_dir / "session.json"
 
 
+def _profile_chrome_running(profile_dir: Path) -> bool:
+    """True when a Chromium/Chrome process still references this profile dir."""
+    try:
+        listed = subprocess.run(
+            ["ps", "-eo", "args"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    haystack = listed.stdout or ""
+    marker = str(profile_dir)
+    if marker not in haystack:
+        return False
+    lowered = haystack.casefold()
+    return "chrome" in lowered or "chromium" in lowered
+
+
 class ProfileLock:
     """File lock that prevents concurrent use of one Chromium profile."""
 
     def __init__(self, profile_dir: Path) -> None:
         self.path = profile_dir / ".profile.lock"
+        self.profile_dir = profile_dir
 
     def status(self) -> str:
         if not self.path.parent.exists():
@@ -83,6 +106,15 @@ class ProfileLock:
     def release(self) -> None:
         if self.path.exists():
             self.path.unlink()
+
+    def release_orphaned(self) -> bool:
+        """Drop a leftover lock when no Chromium still holds the profile."""
+        if not self.path.exists():
+            return False
+        if _profile_chrome_running(self.profile_dir):
+            return False
+        self.release()
+        return True
 
 
 def _module_available(name: str) -> bool:
@@ -114,6 +146,27 @@ def novnc_configured() -> bool:
         return False
     web = Path(os.getenv("HH_NOVNC_WEB", "/usr/share/novnc"))
     return web.exists()
+
+
+def interactive_display_ready(*, timeout: float = 1.0) -> bool:
+    """True when local x11vnc accepts connections (noVNC websocket backend)."""
+    port = int(os.getenv("HH_VNC_PORT", "5900"))
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def require_interactive_login_runtime() -> None:
+    """Fail fast with stable codes when operator login cannot become usable."""
+    preflight = egress_preflight_code()
+    if preflight:
+        raise SessionError(preflight)
+    if not novnc_configured():
+        raise SessionError("novnc_unavailable")
+    if not interactive_display_ready():
+        raise SessionError("novnc_unavailable")
 
 
 def browser_automation_level() -> str:
@@ -196,14 +249,20 @@ def open_login(
     resolved.ensure()
     if not chromium_installed():
         raise SessionError("chromium_missing")
+    # Detached operator path needs a live VNC/noVNC stack; unit tests inject a launcher.
+    if detach or launcher is None:
+        require_interactive_login_runtime()
+    lock = ProfileLock(resolved.profile_dir)
+    lock.release_orphaned()
     report: dict[str, Any] = {
         "auth_session": "pending_operator",
         "browser_started": False,
         "detached": detach,
         "login_url": login_url,
         "novnc_url": novnc_public_url(),
-        "profile_lock": ProfileLock(resolved.profile_dir).status(),
+        "profile_lock": lock.status(),
         "captcha_bypass": False,
+        "interactive_ready": interactive_display_ready() if detach or launcher is None else True,
     }
     if detach:
         write_auth_session(resolved, "pending_operator", source="auth_open_login")
@@ -241,12 +300,19 @@ def open_login(
         # SingletonLock — verify the child is still alive briefly.
         time.sleep(2.5)
         if child.poll() is not None:
+            detail = ""
+            with contextlib.suppress(OSError):
+                detail = log_path.read_text(encoding="utf-8")[-400:]
+            if "profile_locked" in detail:
+                raise SessionError("profile_locked")
+            if "novnc_unavailable" in detail:
+                raise SessionError("novnc_unavailable")
             raise SessionError("browser_launch_failed")
         report["browser_started"] = True
         report["pid"] = child.pid
+        report["profile_lock"] = lock.status()
         return report
 
-    lock = ProfileLock(resolved.profile_dir)
     lock.acquire("auth-open-login")
     write_auth_session(resolved, "pending_operator", source="auth_open_login")
     report["profile_lock"] = "locked"
