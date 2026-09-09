@@ -239,11 +239,15 @@ def _list_resumes_raw(
     }
 
     if not auth.get("login_ready"):
+        auth_session = str(auth.get("auth_session") or "absent")
+        # pending_operator means open-login already started: owner must confirm,
+        # not open another login as if auth never began.
+        action_code = "confirm_login" if auth_session == "pending_operator" else "open_login"
         return {
             **base,
             "status": STATUS_NOT_AUTHORIZED,
             "code": "browser_login_required",
-            "action": {"code": "open_login", "novnc_url": _novnc_url()},
+            "action": {"code": action_code, "novnc_url": _novnc_url()},
         }
 
     lock = ProfileLock(resolved.profile_dir)

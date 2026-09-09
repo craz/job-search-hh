@@ -330,10 +330,43 @@ def open_login(
     return report
 
 
+def _probe_browser_login_kind(paths: SessionPaths) -> str:
+    """Return resumes-page kind for the persistent profile, or ``skipped``.
+
+    Used by ``confirm_login`` so an unauthenticated browser cannot flip Job
+    Search into ``connected`` merely because the operator clicked confirm.
+    Probe failures are skipped (do not block a known-good OAuth path).
+    """
+    if not chromium_installed():
+        return "skipped"
+    try:
+        from job_search_hh.resumes import DEFAULT_RESUMES_URL, _read_resumes_page
+    except ImportError:
+        return "skipped"
+    try:
+        lock = ProfileLock(paths.profile_dir)
+        lock.acquire("confirm-login-probe")
+        try:
+            raw = _read_resumes_page(
+                profile_dir=paths.profile_dir,
+                resumes_url=DEFAULT_RESUMES_URL,
+                timeout_ms=45_000,
+            )
+        finally:
+            lock.release()
+    except Exception:  # noqa: BLE001 - probe must not crash confirm
+        return "skipped"
+    if not isinstance(raw, dict):
+        return "skipped"
+    kind = str(raw.get("kind") or "skipped")
+    return kind if kind else "skipped"
+
+
 def confirm_login(
     paths: SessionPaths | None = None,
     *,
     confirmed: bool,
+    login_probe: Any | None = None,
 ) -> dict[str, Any]:
     """Record operator confirmation that interactive HH login succeeded.
 
@@ -341,12 +374,37 @@ def confirm_login(
     released and later read-only resume scraping can reuse the same profile.
     Best-effort OAuth refresh runs when a refresh_token is present so connection
     status can become ``connected`` instead of staying ``expired``.
+
+    When the browser profile is still on a login wall, stays
+    ``pending_operator`` (does not claim success).
     """
     if not confirmed:
         raise SessionError("confirmation_required")
     resolved = paths or SessionPaths.from_env()
     resolved.ensure()
     _stop_detached_login_browser(resolved)
+
+    prior_session = read_auth_session(resolved)
+    browser_kind = "skipped"
+    should_probe = login_probe is not None or prior_session == "pending_operator"
+    if should_probe:
+        probe = login_probe if login_probe is not None else _probe_browser_login_kind
+        try:
+            browser_kind = str(probe(resolved) or "skipped")
+        except Exception:  # noqa: BLE001
+            browser_kind = "skipped"
+    if browser_kind in {"login_required", "captcha_or_action_required"}:
+        write_auth_session(resolved, "pending_operator", source="confirm_login_incomplete")
+        report = auth_status(resolved)
+        report["token_refresh"] = "skipped"
+        report["browser_login"] = browser_kind
+        report["code"] = (
+            "browser_login_incomplete"
+            if browser_kind == "login_required"
+            else "browser_captcha_or_action_required"
+        )
+        return report
+
     write_auth_session(resolved, "present", source="operator_confirm")
     token_refresh = "skipped"
     try:
@@ -364,6 +422,7 @@ def confirm_login(
         token_refresh = "failed"
     report = auth_status(resolved)
     report["token_refresh"] = token_refresh
+    report["browser_login"] = browser_kind
     return report
 
 

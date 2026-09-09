@@ -48,6 +48,23 @@ def test_without_browser_login_skips_reader(
     assert called["n"] == 0
 
 
+def test_pending_operator_offers_confirm_not_open_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    write_auth_session(paths, "pending_operator", source="test")
+
+    def boom(**_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("reader must not run before operator confirm")
+
+    report = list_resumes(paths, page_reader=boom)
+    assert report["status"] == STATUS_NOT_AUTHORIZED
+    assert report["code"] == "browser_login_required"
+    assert report["action"]["code"] == "confirm_login"
+    assert report["login_ready"] is False
+
+
 def test_login_wall_is_not_empty_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
     paths = _paths(tmp_path)

@@ -181,7 +181,11 @@ def _sync_resume_content_raw(
         version_id = resume_version.get("id")
         content_hash = resume_version.get("content_hash")
 
-    file_report: dict[str, Any] = {"ok": False, "status": STATUS_UNAVAILABLE, "code": "not_attempted"}
+    file_report: dict[str, Any] = {
+        "ok": False,
+        "status": STATUS_UNAVAILABLE,
+        "code": "not_attempted",
+    }
     if version_id:
         downloader = file_downloader or download_resume_file
         if file_downloader is None:
@@ -207,12 +211,16 @@ def _sync_resume_content_raw(
                     "ok": True,
                     "status": STATUS_AVAILABLE,
                     "code": "stored" if artifact.get("created") else "unchanged",
-                    "artifact_id": artifact_row.get("id") if isinstance(artifact_row, dict) else None,
+                    "artifact_id": artifact_row.get("id")
+                    if isinstance(artifact_row, dict)
+                    else None,
                     "mime_type": file_result.get("mime_type"),
                     "original_filename": file_result.get("original_filename"),
                     "size_bytes": file_result.get("size_bytes"),
                 }
-                raw_context = artifact.get("candidate_context") if isinstance(artifact, dict) else None
+                raw_context = (
+                    artifact.get("candidate_context") if isinstance(artifact, dict) else None
+                )
                 if isinstance(raw_context, dict):
                     candidate_context = raw_context
             except CoreError as error:

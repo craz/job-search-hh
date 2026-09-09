@@ -324,8 +324,9 @@ def test_html_fixtures_extract_with_playwright() -> None:
     """
     pytest.importorskip("playwright.sync_api")
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-    from playwright.sync_api import sync_playwright
     from threading import Thread
+
+    from playwright.sync_api import sync_playwright
 
     class _FixtureHandler(SimpleHTTPRequestHandler):
         def __init__(self, *args: Any, **kwargs: Any) -> None:

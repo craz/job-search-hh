@@ -124,7 +124,9 @@ def _persist_playwright_download(download: Any) -> dict[str, Any]:
     }
 
 
-def _trigger_download_on_page(page: Any, *, external_resume_id: str, timeout_ms: int) -> dict[str, Any]:
+def _trigger_download_on_page(
+    page: Any, *, external_resume_id: str, timeout_ms: int
+) -> dict[str, Any]:
     """Open resume «…» menu, choose visible «Скачать», then first offered format."""
     card = _resume_card_locator(page, external_resume_id)
     if card.count() == 0:
@@ -149,7 +151,9 @@ def _trigger_download_on_page(page: Any, *, external_resume_id: str, timeout_ms:
 
     try:
         with page.expect_download(timeout=timeout_ms) as download_info:
-            page.locator('[data-qa="operations-list-download-resume"]').first.click(timeout=timeout_ms)
+            page.locator('[data-qa="operations-list-download-resume"]').first.click(
+                timeout=timeout_ms
+            )
         return _persist_playwright_download(download_info.value)
     except Exception:
         return {"kind": "action_missing"}

@@ -73,9 +73,7 @@ def proxy_connect_works(
         with socket.create_connection((host, port), timeout=timeout) as sock:
             sock.settimeout(timeout)
             request = (
-                f"CONNECT {dest_host}:{dest_port} HTTP/1.1\r\n"
-                f"Host: {dest_host}:{dest_port}\r\n"
-                f"\r\n"
+                f"CONNECT {dest_host}:{dest_port} HTTP/1.1\r\nHost: {dest_host}:{dest_port}\r\n\r\n"
             ).encode("ascii")
             sock.sendall(request)
             response = b""

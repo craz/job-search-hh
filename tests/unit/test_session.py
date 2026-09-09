@@ -14,6 +14,7 @@ from job_search_hh.session import (
     confirm_login,
     open_login,
     session_status,
+    write_auth_session,
 )
 
 
@@ -74,7 +75,7 @@ def test_open_login_and_confirm_mark_ready(tmp_path: Path, monkeypatch: pytest.M
     assert launcher.calls == 1
     assert auth_status(paths)["login_ready"] is False
 
-    confirmed = confirm_login(paths, confirmed=True)
+    confirmed = confirm_login(paths, confirmed=True, login_probe=lambda _paths: "ok")
     assert confirmed["auth_session"] == "present"
     assert confirmed["login_ready"] is True
 
@@ -94,7 +95,7 @@ def test_confirm_login_stops_detached_browser_pid(
     pid_path = paths.state_dir / "login-browser.pid"
     # Non-existent pid: kill is best-effort; lock must still release.
     pid_path.write_text("1", encoding="utf-8")
-    confirmed = confirm_login(paths, confirmed=True)
+    confirmed = confirm_login(paths, confirmed=True, login_probe=lambda _paths: "ok")
     assert confirmed["login_ready"] is True
     assert not pid_path.exists()
     assert lock.status() == "unlocked"
@@ -122,10 +123,24 @@ def test_confirm_login_refreshes_expired_oauth_token(
         calls.append("refresh")
 
     monkeypatch.setattr("job_search_hh.oauth.refresh_token_record", _refresh)
-    report = confirm_login(paths, confirmed=True)
+    report = confirm_login(paths, confirmed=True, login_probe=lambda _paths: "ok")
     assert calls == ["refresh"]
     assert report["token_refresh"] == "refreshed"
     assert report["auth_session"] == "present"
+
+
+def test_confirm_login_keeps_pending_when_browser_not_logged_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
+    write_auth_session(paths, "pending_operator", source="test")
+    report = confirm_login(paths, confirmed=True, login_probe=lambda _paths: "login_required")
+    assert report["auth_session"] == "pending_operator"
+    assert report["login_ready"] is False
+    assert report["code"] == "browser_login_incomplete"
+    assert report["browser_login"] == "login_required"
+    assert report["token_refresh"] == "skipped"
 
 
 def test_confirm_requires_explicit_flag(tmp_path: Path) -> None:
