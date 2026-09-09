@@ -75,12 +75,14 @@ def _profile_chrome_running(profile_dir: Path) -> bool:
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    haystack = listed.stdout or ""
     marker = str(profile_dir)
-    if marker not in haystack:
-        return False
-    lowered = haystack.casefold()
-    return "chrome" in lowered or "chromium" in lowered
+    for line in (listed.stdout or "").splitlines():
+        low = line.casefold()
+        if marker not in line:
+            continue
+        if "chrome" in low or "chromium" in low:
+            return True
+    return False
 
 
 class ProfileLock:

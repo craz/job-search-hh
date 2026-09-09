@@ -29,21 +29,25 @@ def _clear_stale_chromium_singleton(profile_dir: Path) -> None:
     """
     lock = profile_dir / "SingletonLock"
     socket = profile_dir / "SingletonSocket"
-    if not lock.exists() and not socket.exists():
+    # Broken symlinks: Path.exists() is False, but they still block Chromium.
+    if not (lock.exists() or lock.is_symlink()) and not (socket.exists() or socket.is_symlink()):
         return
     # If a chrome process is alive for this profile, leave the lock alone.
     try:
         listed = subprocess.run(
-            ["ps", "-eo", "pid,cmd"],
+            ["ps", "-eo", "args"],
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
         )
-        haystack = listed.stdout or ""
         marker = str(profile_dir)
-        if "chrome" in haystack and marker in haystack:
-            return
+        for line in (listed.stdout or "").splitlines():
+            low = line.casefold()
+            if marker not in line:
+                continue
+            if "chrome" in low or "chromium" in low:
+                return
     except (OSError, subprocess.SubprocessError):
         pass
     for name in ("SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"):
