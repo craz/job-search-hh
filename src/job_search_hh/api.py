@@ -48,11 +48,18 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/health/ready":
+            from job_search_hh.session import read_auth_session
+
             egress = egress_diagnostic()
             preflight_code = egress_preflight_code()
+            auth_session = read_auth_session(SessionPaths.from_env())
+            browser_egress = "unavailable" if preflight_code else "ok"
             payload = {
                 "status": "ok" if not preflight_code else "degraded",
                 "component": "job-search-hh",
+                "api": "ok",
+                "browser_egress": browser_egress,
+                "auth_session": auth_session,
                 "egress": egress,
             }
             if preflight_code:
@@ -61,7 +68,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         "code": preflight_code,
                         "message": (
                             "Local HH browser egress is unavailable; "
-                            "restart the workspace with make up."
+                            "restore the full stack with make boot or make up."
                         ),
                     }
                 )

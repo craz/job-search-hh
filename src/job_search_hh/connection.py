@@ -56,6 +56,24 @@ def connection_status(paths: SessionPaths | None = None) -> dict[str, Any]:
     login confirmed and a non-expired access token is present). It does **not**
     assert that every HH API endpoint is permitted.
     """
+    from job_search_hh.egress import CODE_BROWSER_PROXY_UNAVAILABLE, egress_preflight_code
+
+    preflight = egress_preflight_code()
+    if preflight == CODE_BROWSER_PROXY_UNAVAILABLE:
+        checked_at = _utc_now()
+        return with_recovery(
+            {
+                "status": STATUS_UNAVAILABLE,
+                "authenticated": False,
+                "login_ready": False,
+                "expired": False,
+                "expires_at": None,
+                "action": _action(ACTION_NONE),
+                "code": CODE_BROWSER_PROXY_UNAVAILABLE,
+                "detail": "browser_egress_unavailable",
+                "checked_at": checked_at,
+            }
+        )
     return with_recovery(_connection_status_raw(paths))
 
 
