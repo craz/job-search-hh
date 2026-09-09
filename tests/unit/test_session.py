@@ -100,6 +100,34 @@ def test_confirm_login_stops_detached_browser_pid(
     assert lock.status() == "unlocked"
 
 
+def test_confirm_login_refreshes_expired_oauth_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
+    paths.ensure()
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "job_search_hh.oauth.token_status",
+        lambda _paths=None: {
+            "access_token_present": True,
+            "refresh_token_present": True,
+            "expired": True,
+            "expires_at": "2026-09-01T00:00:00Z",
+        },
+    )
+
+    def _refresh(_paths=None):
+        calls.append("refresh")
+
+    monkeypatch.setattr("job_search_hh.oauth.refresh_token_record", _refresh)
+    report = confirm_login(paths, confirmed=True)
+    assert calls == ["refresh"]
+    assert report["token_refresh"] == "refreshed"
+    assert report["auth_session"] == "present"
+
+
 def test_confirm_requires_explicit_flag(tmp_path: Path) -> None:
     paths = SessionPaths(state_dir=tmp_path / "state", profile_dir=tmp_path / "profile")
     with pytest.raises(SessionError, match="confirmation_required"):

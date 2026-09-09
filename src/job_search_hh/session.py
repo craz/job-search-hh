@@ -339,6 +339,8 @@ def confirm_login(
 
     Stops a detached login browser (if still running) so the profile lock is
     released and later read-only resume scraping can reuse the same profile.
+    Best-effort OAuth refresh runs when a refresh_token is present so connection
+    status can become ``connected`` instead of staying ``expired``.
     """
     if not confirmed:
         raise SessionError("confirmation_required")
@@ -346,7 +348,23 @@ def confirm_login(
     resolved.ensure()
     _stop_detached_login_browser(resolved)
     write_auth_session(resolved, "present", source="operator_confirm")
-    return auth_status(resolved)
+    token_refresh = "skipped"
+    try:
+        from job_search_hh.oauth import refresh_token_record, token_status
+
+        tokens = token_status(resolved)
+        if tokens.get("refresh_token_present") and tokens.get("expired"):
+            refresh_token_record(resolved)
+            token_refresh = "refreshed"
+        elif tokens.get("access_token_present") and not tokens.get("expired"):
+            token_refresh = "fresh"
+        elif not tokens.get("access_token_present"):
+            token_refresh = "missing"
+    except Exception:  # noqa: BLE001 - never fail confirm on optional OAuth refresh
+        token_refresh = "failed"
+    report = auth_status(resolved)
+    report["token_refresh"] = token_refresh
+    return report
 
 
 def _stop_detached_login_browser(paths: SessionPaths) -> None:
