@@ -16,7 +16,7 @@ from job_search_hh.vacancy_dto import (
     allowlist_summary,
 )
 
-EXTRACTOR_VERSION = "hh-browser-vacancy-ro-v2"
+EXTRACTOR_VERSION = "hh-browser-vacancy-ro-v3"
 
 _VACANCY_ID_RE = re.compile(r"/vacancy/(\d+)")
 
@@ -279,7 +279,7 @@ DETAIL_EXTRACT_JS = """() => {
     return { kind: 'permission_blocked', content: {} };
   }
 
-  const href = location.href || '';
+  // Reuse page href from challenge probes above (do not redeclare const href).
   const idMatch = href.match(/\\/vacancy\\/(\\d+)/);
   const external_id = idMatch ? idMatch[1] : '';
   const title = text(qa('[data-qa="vacancy-title"], h1'));

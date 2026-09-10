@@ -3,6 +3,13 @@
 All notable changes are documented here using Keep a Changelog categories and
 Semantic Versioning.
 
+## Unreleased
+
+### Fixed
+
+- Vacancy detail Playwright extract: remove duplicate `const href` in `DETAIL_EXTRACT_JS` (Page.evaluate SyntaxError was mislabeled `vacancy_detail_failed` / `network_failure` while SERP still worked).
+- Detail failure codes: `page_extract_failed` for evaluate/SyntaxError (not mapped to network recovery).
+
 ## [Unreleased]
 
 ### Changed

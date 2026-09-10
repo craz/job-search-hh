@@ -42,6 +42,30 @@ from job_search_hh.vacancy_query import (
 DEFAULT_VACANCY_URL_TEMPLATE = "https://hh.ru/vacancy/{external_id}"
 TRANSPORT = "browser_readonly"
 
+
+def _detail_failure_code(error: BaseException) -> str:
+    """Map detail-page exceptions to stable codes (never pretend SyntaxError is network)."""
+    transport = classify_browser_transport_error(error)
+    if transport:
+        return transport
+    message = str(error)
+    low = message.casefold()
+    if (
+        "already been declared" in low
+        or "syntaxerror" in low
+        or "page.evaluate" in low
+        or "identifier '" in low
+    ):
+        return "page_extract_failed"
+    if "timeout" in low or "err_timed_out" in low:
+        return "vacancy_detail_failed"
+    # Chromium net errors that are not proxy-specific still stay detail-failed
+    # (recovery maps vacancy_detail_failed → network_failure).
+    if "net::err_" in low or "ns_error_" in low:
+        return "vacancy_detail_failed"
+    return "vacancy_detail_failed"
+
+
 STATUS_AVAILABLE = "available"
 STATUS_NOT_AUTHORIZED = "not_authorized"
 STATUS_PERMISSION_BLOCKED = "permission_blocked"
@@ -524,8 +548,9 @@ def _read_vacancy_pages(
                             {
                                 "external_id": external_id,
                                 "status": "failed",
-                                "code": "vacancy_detail_failed",
+                                "code": _detail_failure_code(error),
                                 "error": type(error).__name__,
+                                "error_message": str(error)[:300],
                                 "content": None,
                             }
                         )
