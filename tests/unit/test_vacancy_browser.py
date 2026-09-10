@@ -382,9 +382,187 @@ def test_allowlist_detail_rejects_raw_dom() -> None:
     assert "raw_html" not in cleaned
 
 
+def test_acquire_start_page_increments_requested_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+    seen: list[int] = []
+
+    def reader(*, page_urls: list[tuple[int, str]], **_kwargs: Any) -> dict[str, Any]:
+        seen.extend(index for index, _url in page_urls)
+        return {
+            "kind": "ok",
+            "pages": [
+                {
+                    "page": index,
+                    "status": "ok",
+                    "code": "ready",
+                    "items": [
+                        {
+                            "external_id": f"id-{index}",
+                            "title": f"T{index}",
+                            "url": f"https://hh.ru/vacancy/{index}",
+                        }
+                    ],
+                    "meta": {
+                        "found_text": "Найдено 2845 подходящих вакансий для резюме",
+                        "observed_page_size": 50,
+                    },
+                }
+                for index in seen
+            ],
+            "details": [],
+        }
+
+    report = acquire_vacancies(
+        SearchCriteria(text="python"),
+        ExecutionPolicy(max_pages=2, start_page=3),
+        paths=paths,
+        page_reader=reader,
+        fetch_details=False,
+        serp_guard=lambda **_kwargs: {"ok": True, "source_total": 2845},
+    )
+    assert seen == [3, 4]
+    assert report["pagination"]["start_page"] == 3
+    assert report["pagination"]["page_from"] == 3
+    assert report["pagination"]["page_to"] == 4
+    assert report["pagination"]["next_page"] == 5
+    assert report["pagination"]["more_remaining"] is True
+    assert report["pagination"]["found"] == 2845
+    assert report["pagination"]["per_page"] == 1
+    assert report["pagination"]["pages"] == 2845
+
+
+def test_acquire_final_page_clears_continuation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+
+    def reader(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "kind": "ok",
+            "pages": [
+                {
+                    "page": 0,
+                    "status": "ok",
+                    "code": "ready",
+                    "items": [
+                        {
+                            "external_id": f"id-{index}",
+                            "title": f"T{index}",
+                            "url": f"https://hh.ru/vacancy/{index}",
+                        }
+                        for index in range(40)
+                    ],
+                    "meta": {"found_text": "Найдено 40 подходящих вакансий для резюме"},
+                }
+            ],
+            "details": [],
+        }
+
+    report = acquire_vacancies(
+        SearchCriteria(text="python"),
+        ExecutionPolicy(max_pages=1, start_page=0),
+        paths=paths,
+        page_reader=reader,
+        fetch_details=False,
+        serp_guard=lambda **_kwargs: {"ok": True, "source_total": 40},
+    )
+    assert report["pagination"]["more_remaining"] is False
+    assert report["pagination"]["next_page"] is None
+    assert report["pagination"]["pages"] == 1
+    assert report["pagination"]["per_page"] == 40
+
+
+def test_acquire_empty_page_marks_exhausted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+
+    def reader(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "kind": "ok",
+            "pages": [
+                {
+                    "page": 2,
+                    "status": "ok",
+                    "code": "ready",
+                    "items": [],
+                    "meta": {"found_text": "Найдено 100 подходящих вакансий для резюме"},
+                }
+            ],
+            "details": [],
+        }
+
+    report = acquire_vacancies(
+        SearchCriteria(text="python"),
+        ExecutionPolicy(max_pages=1, start_page=2),
+        paths=paths,
+        page_reader=reader,
+        fetch_details=False,
+        serp_guard=lambda **_kwargs: {"ok": True, "source_total": 100},
+    )
+    assert report["pagination"]["exhausted"] is True
+    assert report["pagination"]["more_remaining"] is False
+    assert report["code"] == "empty"
+
+
+def test_acquire_respects_max_pages_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+    seen: list[int] = []
+
+    def reader(*, page_urls: list[tuple[int, str]], **_kwargs: Any) -> dict[str, Any]:
+        seen.extend(index for index, _ in page_urls)
+        return {
+            "kind": "ok",
+            "pages": [
+                {
+                    "page": index,
+                    "status": "ok",
+                    "code": "ready",
+                        "items": [
+                            {
+                                "external_id": f"v{index}-{slot}",
+                                "title": "T",
+                                "url": f"https://hh.ru/vacancy/{index}-{slot}",
+                            }
+                            for slot in range(50)
+                        ],
+                    "meta": {"found_text": "Найдено 2845 подходящих вакансий для резюме"},
+                }
+                for index, _ in page_urls
+            ],
+            "details": [],
+        }
+
+    report = acquire_vacancies(
+        SearchCriteria(text="python"),
+        ExecutionPolicy(max_pages=5, start_page=0),
+        paths=paths,
+        page_reader=reader,
+        fetch_details=False,
+        serp_guard=lambda **_kwargs: {"ok": True, "source_total": 2845},
+    )
+    assert seen == [0, 1, 2, 3, 4]
+    assert report["pagination"]["pages_fetched"] == 5
+    assert report["pagination"]["max_pages"] == 5
+    assert report["pagination"]["more_remaining"] is True
+    assert report["pagination"]["next_page"] == 5
+    assert len(report["summaries"]) == 250
+
+
 def json_load(path: Path) -> dict[str, Any]:
     import json
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
+    return payload
     return payload

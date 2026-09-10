@@ -31,6 +31,7 @@ from job_search_hh.vacancy_extractors import (
     normalize_search_payload,
 )
 from job_search_hh.vacancy_query import (
+    MAX_START_PAGE,
     ExecutionPolicy,
     QueryMapping,
     SearchCriteria,
@@ -81,6 +82,7 @@ def _base_report(
         "execution": {
             "order": execution.order,
             "max_pages": execution.max_pages,
+            "start_page": execution.start_page,
             "page_size": execution.page_size,
             "page_size_note": mapping.page_size_note,
         },
@@ -96,9 +98,17 @@ def _base_report(
         "pagination": {
             "pages_fetched": 0,
             "max_pages": max(1, execution.max_pages),
+            "start_page": int(execution.start_page or 0),
+            "page_from": int(execution.start_page or 0),
+            "page_to": None,
+            "next_page": None,
+            "more_remaining": False,
             "exhausted": False,
             "max_pages_reached": False,
             "observed_page_size": None,
+            "per_page": None,
+            "found": None,
+            "pages": None,
             "found_text": None,
             "partial": False,
         },
@@ -311,6 +321,45 @@ def _read_single_vacancy_detail(
     }
 
 
+def _finalize_pagination_meta(
+    pagination: dict[str, Any],
+    *,
+    start_page: int,
+    pages_fetched: int,
+    max_pages: int,
+    exhausted: bool,
+    observed_sizes: list[int],
+) -> dict[str, Any]:
+    """Attach HH-style found/pages/continuation fields from observed SERP metadata."""
+    observed = observed_sizes[0] if observed_sizes else None
+    page_to = start_page + pages_fetched - 1 if pages_fetched else None
+    absolute_next = start_page + pages_fetched
+    source_total = pagination.get("source_total")
+    if source_total is None:
+        source_total = pagination.get("found")
+    pages_total: int | None = None
+    more_remaining = False
+    if isinstance(source_total, int) and observed and observed > 0:
+        pages_total = (int(source_total) + observed - 1) // observed
+        more_remaining = (not exhausted) and absolute_next < pages_total
+    elif not exhausted and pages_fetched >= max_pages and observed_sizes and observed_sizes[-1] > 0:
+        more_remaining = True
+    pagination.update(
+        {
+            "start_page": start_page,
+            "page_from": start_page,
+            "page_to": page_to,
+            "next_page": absolute_next if more_remaining else None,
+            "more_remaining": more_remaining,
+            "observed_page_size": observed,
+            "per_page": observed,
+            "found": source_total if isinstance(source_total, int) else pagination.get("found"),
+            "pages": pages_total,
+        }
+    )
+    return pagination
+
+
 def acquire_vacancies(
     criteria: SearchCriteria,
     execution: ExecutionPolicy | None = None,
@@ -327,20 +376,26 @@ def acquire_vacancies(
     resolved = paths or SessionPaths.from_env()
     policy = execution or ExecutionPolicy()
     max_pages = max(1, min(int(policy.max_pages), 20))
+    try:
+        start_page = int(policy.start_page or 0)
+    except (TypeError, ValueError):
+        start_page = 0
+    start_page = max(0, min(start_page, MAX_START_PAGE))
     policy = ExecutionPolicy(
         order=policy.order,
         max_pages=max_pages,
+        start_page=start_page,
         page_size=policy.page_size,
     )
+    page_indexes = list(range(start_page, start_page + max_pages))
     if page_url_builder is not None:
-        first_url = page_url_builder(0)
+        first_url = page_url_builder(start_page)
         first_map = QueryMapping(url=first_url, query={}, unsupported=[], page_size_note=None)
-        page_urls = [(index, page_url_builder(index)) for index in range(max_pages)]
+        page_urls = [(index, page_url_builder(index)) for index in page_indexes]
     else:
-        first_map = map_search_query(criteria, policy, page=0)
+        first_map = map_search_query(criteria, policy, page=start_page)
         page_urls = [
-            (index, map_search_query(criteria, policy, page=index).url)
-            for index in range(max_pages)
+            (index, map_search_query(criteria, policy, page=index).url) for index in page_indexes
         ]
     report = _base_report(criteria=criteria, execution=policy, mapping=first_map)
     report["connection_status"] = str(
@@ -381,7 +436,7 @@ def acquire_vacancies(
                 detail_ids=[],
                 timeout_ms=int(timeout_seconds * 1000),
                 fetch_details=bool(fetch_details),
-                detail_limit=max(0, min(int(detail_limit), 200)),
+                detail_limit=max(0, min(int(detail_limit), 1000)),
             )
         finally:
             lock.release()
@@ -504,6 +559,14 @@ def acquire_vacancies(
         "failed_pages": failed_pages,
         "detail_failures": detail_failures,
     }
+    _finalize_pagination_meta(
+        pagination,
+        start_page=start_page,
+        pages_fetched=pages_fetched,
+        max_pages=max_pages,
+        exhausted=exhausted,
+        observed_sizes=observed_sizes,
+    )
     report["pagination"] = pagination
 
     if wall == "login_required":
@@ -572,6 +635,14 @@ def acquire_vacancies(
             )
         if guard_result.get("source_total") is not None:
             pagination["source_total"] = guard_result.get("source_total")
+            _finalize_pagination_meta(
+                pagination,
+                start_page=start_page,
+                pages_fetched=pages_fetched,
+                max_pages=max_pages,
+                exhausted=exhausted,
+                observed_sizes=observed_sizes,
+            )
             report["pagination"] = pagination
 
     if partial or detail_failures > 0:

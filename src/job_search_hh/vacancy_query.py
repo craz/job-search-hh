@@ -25,13 +25,16 @@ SUPPORTED_CRITERIA_PARAMS = frozenset(
         "only_with_salary",
     }
 )
-SUPPORTED_EXECUTION_PARAMS = frozenset({"order", "max_pages"})
+SUPPORTED_EXECUTION_PARAMS = frozenset({"order", "max_pages", "start_page"})
 
 # HH Web SERP uses a fixed page size (~50); API-style page_size is not a Web control.
 WEB_PAGE_SIZE_UNSUPPORTED = (
     "HH Web search does not expose a compatible page_size control; "
     "observed SERP size is recorded after fetch"
 )
+
+# Soft bound for continuation offsets (HH SERP typically caps ~2000 results / ~40 pages).
+MAX_START_PAGE = 39
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,7 @@ class ExecutionPolicy:
 
     order: str | None = "publication_time"
     max_pages: int = 1
+    start_page: int = 0
     page_size: int | None = None  # not mapped to Web; reported unsupported if set
 
 

@@ -30,7 +30,7 @@ from job_search_hh.vacancy_browser import (
     VacancyPagesReader,
     acquire_vacancies,
 )
-from job_search_hh.vacancy_query import ExecutionPolicy, SearchCriteria
+from job_search_hh.vacancy_query import MAX_START_PAGE, ExecutionPolicy, SearchCriteria
 
 AcquireFn = Callable[..., dict[str, Any]]
 
@@ -77,7 +77,7 @@ def criteria_from_snapshot(snapshot: dict[str, Any]) -> SearchCriteria:
 
 
 def execution_for_browser(
-    snapshot: dict[str, Any] | None, *, max_pages: int | None = None
+    snapshot: dict[str, Any] | None, *, max_pages: int | None = None, start_page: int | None = None
 ) -> dict[str, Any]:
     """Build Core execution payload for browser transport (no fake page_size)."""
     snap = dict(snapshot or {})
@@ -87,9 +87,15 @@ def execution_for_browser(
         pages_int = max(1, min(int(pages), 20))
     except (TypeError, ValueError):
         pages_int = 1
+    raw_start = start_page if start_page is not None else snap.get("start_page", 0)
+    try:
+        start_int = max(0, min(int(raw_start or 0), 39))
+    except (TypeError, ValueError):
+        start_int = 0
     return {
         "order": order,
         "max_pages": pages_int,
+        "start_page": start_int,
         "transport": "browser",
     }
 
@@ -203,6 +209,7 @@ def run_vacancy_search(
     policy = ExecutionPolicy(
         order=str(execution_snap.get("order") or order),
         max_pages=int(execution_snap.get("max_pages") or max_pages),
+        start_page=int(execution_snap.get("start_page") or 0),
         page_size=None,
     )
 
@@ -611,6 +618,7 @@ def _process_unique_items(
 def run_resume_suitable_search(
     *,
     max_pages: int = 1,
+    start_page: int = 0,
     order: str = "publication_time",
     core: CoreClient | None = None,
     paths: SessionPaths | None = None,
@@ -652,9 +660,15 @@ def run_resume_suitable_search(
         "hh_resume_title": context.get("hh_resume_title"),
     }
 
+    page_cap = max(1, min(int(max_pages), 20))
+    try:
+        page0 = max(0, min(int(start_page or 0), MAX_START_PAGE))
+    except (TypeError, ValueError):
+        page0 = 0
     execution = {
         "order": order or "publication_time",
-        "max_pages": max(1, min(int(max_pages), 20)),
+        "max_pages": page_cap,
+        "start_page": page0,
         "transport": "browser",
         "discovery": "resume_suitable",
     }
@@ -681,6 +695,7 @@ def run_resume_suitable_search(
     policy = ExecutionPolicy(
         order=str(execution["order"]),
         max_pages=int(str(execution["max_pages"])),
+        start_page=int(str(execution["start_page"])),
         page_size=None,
     )
 
@@ -702,7 +717,7 @@ def run_resume_suitable_search(
             paths=resolved,
             page_reader=page_reader,
             fetch_details=True,
-            detail_limit=200,
+            detail_limit=min(1000, max(50, page_cap * 50)),
             timeout_seconds=timeout_seconds,
             page_url_builder=page_url_builder,
             serp_guard=serp_guard,

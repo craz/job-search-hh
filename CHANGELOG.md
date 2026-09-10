@@ -5,6 +5,12 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Resume-suitable acquisition paginates with `execution.max_pages` + `execution.start_page`
+  (continuation), exposes HH-style `found` / `pages` / `next_page` / `more_remaining`, and
+  scales detail ingest to the page cap so Web is not stuck on silent first-page-only runs.
+
 ### Added
 
 - R2.4.1b vacancy source-status check: `GET /api/v1/vacancies/{external_id}/source-status`

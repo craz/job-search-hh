@@ -312,8 +312,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                         },
                     )
                     return
+                try:
+                    start_page = int(exec_obj.get("start_page") or 0)
+                except (TypeError, ValueError):
+                    self._json(
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "code": "invalid_request",
+                            "message": "execution.start_page must be an integer",
+                        },
+                    )
+                    return
                 report = run_resume_suitable_search(
                     max_pages=max(1, min(max_pages, 20)),
+                    start_page=max(0, min(start_page, 39)),
                     order=order,
                 )
                 status = (
