@@ -39,6 +39,10 @@ CHALLENGE_STATE_NAME = "challenge_active.json"
 CHALLENGE_DIR_NAME = "challenges"
 ACTION_OPEN_CHALLENGE = "open_challenge"
 ACTION_CONFIRM_CHALLENGE = "confirm_challenge"
+# Headed challenge Chromium exposes CDP so confirm can observe solve without
+# re-navigating to the captured /account/captcha URL.
+DEFAULT_CHALLENGE_CDP_PORT = 9229
+CONFIRM_SESSION_PROBE_URL = "https://hh.ru/applicant/resumes"
 
 
 def _utc_now() -> str:
@@ -110,9 +114,7 @@ def classify_capture(*, challenge_url: str, screenshot: dict[str, Any] | None) -
     return CAPTURE_NO_SCREENSHOT
 
 
-def recovery_available_from_state(
-    state: dict[str, Any] | None, *, url_fallback: str = ""
-) -> bool:
+def recovery_available_from_state(state: dict[str, Any] | None, *, url_fallback: str = "") -> bool:
     """True when operator noVNC recovery may be offered.
 
     Legacy states (pre-capture-v2) omit ``recovery_available``; infer from URL so
@@ -182,9 +184,7 @@ def write_challenge_state(
         "capture_impl": CAPTURE_IMPL_ID,
         "challenge_session_available": False,
         "handoff_pid": None,
-        "novnc_url": (
-            novnc_public_url() if recovery_available and novnc_configured() else None
-        ),
+        "novnc_url": (novnc_public_url() if recovery_available and novnc_configured() else None),
         "note": (
             "Challenge was captured in headless scraper context. "
             "Manual recovery opens headed Chromium at the challenge URL on the "
@@ -278,6 +278,7 @@ def capture_and_persist_live_challenge(
         "capture_status": state.get("capture_status"),
         "capture_impl": CAPTURE_IMPL_ID,
     }
+
 
 def notify_challenge_telegram(state: dict[str, Any]) -> dict[str, Any]:
     """Best-effort DM notify when explicitly configured; never invents credentials."""
@@ -395,6 +396,9 @@ def open_challenge_browser(
         raise SessionError("profile_locked")
 
     display = os.getenv("HH_DISPLAY") or os.getenv("DISPLAY") or ":99"
+    cdp_port = (os.getenv("HH_CHALLENGE_CDP_PORT") or str(DEFAULT_CHALLENGE_CDP_PORT)).strip()
+    if not cdp_port.isdigit():
+        cdp_port = str(DEFAULT_CHALLENGE_CDP_PORT)
     _clear_stale_chromium_singleton(resolved.profile_dir)
     log_path = resolved.state_dir / "challenge-browser.log"
     log_handle = log_path.open("w", encoding="utf-8")
@@ -418,6 +422,9 @@ def open_challenge_browser(
             "HH_PROFILE_DIR": str(resolved.profile_dir),
             "DISPLAY": display,
             "HH_DISPLAY": display,
+            # Observe CAPTCHA solve in the same headed window (confirm must not
+            # re-open challenge_url).
+            "HH_REMOTE_DEBUGGING_PORT": cdp_port,
         },
     )
     log_handle.close()
@@ -445,8 +452,10 @@ def open_challenge_browser(
     state["handoff_pid"] = child.pid
     state["handoff_opened_at"] = _utc_now()
     state["handoff_display"] = display
+    state["cdp_port"] = int(cdp_port)
     state["novnc_url"] = novnc_public_url()
     state["interactive_ready"] = True
+    state["challenge_browser_state"] = "active"
     challenge_state_path(resolved).write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -464,11 +473,15 @@ def open_challenge_browser(
 
 
 def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, Any]:
-    """Re-check challenge URL; clear state only when challenge is gone.
+    """Validate HH session after manual CAPTCHA solve; clear only when healthy.
 
-    If the headed challenge Chromium still holds the profile, refuse with an
-    explicit operator message (do not probe and do not clear). Stale locks /
-    Singleton leftovers are healed only when no Chromium still uses the profile.
+    Captured ``challenge_url`` is handoff-only — post-solve validation must NEVER
+    navigate back to ``/account/captcha`` (that re-enters the gate). Probe the
+    persistent profile against a normal authenticated page (resumes).
+
+    While the headed challenge Chromium is still open:
+    - CDP can report ``active`` (still on CAPTCHA) → refuse with an explicit message
+    - CDP ``solved`` / owner claim → stop headed browser, then session-probe
     """
     resolved = paths or SessionPaths.from_env()
     state = read_challenge_state(resolved)
@@ -504,100 +517,115 @@ def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, An
         }
 
     lock = ProfileLock(resolved.profile_dir)
-    # Heal leftover product lock only when no Chromium still holds the profile.
     lock.release_orphaned()
     chrome_live = _profile_chrome_running(resolved.profile_dir)
     handoff_live = _challenge_handoff_process_alive(state, resolved)
+    browser_snap = {"state": "closed", "url": "", "title": ""}
     if chrome_live or handoff_live or lock.status() == "locked":
-        # Keep state; owner must close the headed window in noVNC.
-        return {
-            "ok": False,
-            "cleared": False,
-            "code": "challenge_browser_open",
-            "challenge": public_challenge_view(resolved) or state,
-            "message": (
-                "Окно CAPTCHA ещё открыто. "
-                "Закройте браузер HeadHunter в noVNC и повторите проверку."
-            ),
-            "challenge_browser_open": True,
-            "profile_lock": lock.status(),
-            "chrome_running": chrome_live,
-        }
+        browser_snap = _inspect_live_challenge_browser(state, resolved)
+        browser_state = str(browser_snap.get("state") or "unknown")
+        if browser_state == "active":
+            state["challenge_browser_state"] = "active"
+            state["last_browser_url"] = browser_snap.get("url")
+            challenge_state_path(resolved).write_text(
+                json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "ok": False,
+                "cleared": False,
+                "code": "challenge_browser_open",
+                "challenge": public_challenge_view(resolved) or state,
+                "message": "Решите CAPTCHA в открытом окне HeadHunter",
+                "challenge_browser_open": True,
+                "challenge_browser_state": "active",
+                "profile_lock": lock.status(),
+                "chrome_running": chrome_live,
+                "observed_url": browser_snap.get("url"),
+            }
+        # solved / unknown / closed-with-stale-lock: release headed window so the
+        # exclusive profile can run the authenticated session probe.
+        state["challenge_browser_state"] = "solved" if browser_state == "solved" else browser_state
+        _stop_challenge_browser(state, resolved)
+        lock.release_orphaned()
+        chrome_live = _profile_chrome_running(resolved.profile_dir)
+        handoff_live = _challenge_handoff_process_alive(state, resolved)
+        if chrome_live or handoff_live or lock.status() == "locked":
+            return {
+                "ok": False,
+                "cleared": False,
+                "code": "challenge_browser_open",
+                "challenge": public_challenge_view(resolved) or state,
+                "message": (
+                    "Окно CAPTCHA ещё открыто. "
+                    "Закройте браузер HeadHunter в noVNC и повторите проверку."
+                ),
+                "challenge_browser_open": True,
+                "challenge_browser_state": "active",
+                "profile_lock": lock.status(),
+                "chrome_running": chrome_live,
+            }
 
-    # Chromium closed: drop stale Singleton* so headless probe can open the profile.
     _clear_stale_chromium_singleton(resolved.profile_dir)
     with contextlib.suppress(OSError):
         (resolved.state_dir / "challenge-browser.pid").unlink()
 
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as error:
-        raise SessionError("playwright_missing") from error
+    probe = _probe_authenticated_session(resolved, lock=lock)
+    final_url = str(probe.get("url") or CONFIRM_SESSION_PROBE_URL)
+    title = str(probe.get("title") or "")
+    kind = str(probe.get("kind") or "invalid")
+    navigated = list(probe.get("navigated_urls") or [])
+    # Hard guard: post-solve must never reopen the captured challenge URL.
+    for nav in navigated:
+        if looks_like_hh_challenge(url=str(nav)) and str(nav).rstrip("/") == url.rstrip("/"):
+            return {
+                "ok": False,
+                "cleared": False,
+                "code": "validation_reopened_challenge_url",
+                "challenge": public_challenge_view(resolved) or state,
+                "message": "Внутренняя ошибка: проверка не должна открывать CAPTCHA URL.",
+                "probed_url": final_url,
+                "navigated_urls": navigated,
+            }
 
-    still_challenged = False
-    final_url = url
-    title = ""
-    probe_targets = _confirm_probe_urls(challenge_url=url)
-    lock.acquire("challenge-confirm-probe")
-    try:
-        with sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(resolved.profile_dir),
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
-            try:
-                page = context.pages[0] if context.pages else context.new_page()
-                # Prefer backurl / resumes — captured captcha URLs are often one-shot.
-                for target in probe_targets:
-                    page.goto(target, wait_until="domcontentloaded", timeout=45_000)
-                    page.wait_for_timeout(1_500)
-                    final_url = str(page.url or "")
-                    try:
-                        title = str(page.title() or "")
-                    except Exception:  # noqa: BLE001
-                        title = ""
-                    challenged = looks_like_hh_challenge(url=final_url, title=title)
-                    if not challenged:
-                        try:
-                            from job_search_hh.vacancy_extractors import _CHALLENGE_DOM_JS
-
-                            challenged = bool(page.evaluate(_CHALLENGE_DOM_JS))
-                        except Exception:  # noqa: BLE001
-                            challenged = False
-                    if challenged:
-                        still_challenged = True
-                        break
-                    # Non-challenge page loaded — session is past the gate.
-                    still_challenged = False
-                    break
-            finally:
-                context.close()
-    finally:
-        lock.release()
-
-    if still_challenged:
+    still_challenged = kind == "captcha_or_action_required" or looks_like_hh_challenge(
+        url=final_url, title=title
+    )
+    if still_challenged or kind in {"login_required", "invalid", "permission_blocked"}:
         state["last_probe_at"] = _utc_now()
         state["last_probe_url"] = final_url
         state["last_probe_title"] = title
+        state["last_probe_kind"] = kind
         state["challenge_session_available"] = False
         state["handoff_pid"] = None
+        state["challenge_browser_state"] = "closed"
         challenge_state_path(resolved).write_text(
             json.dumps(state, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        if still_challenged:
+            message = "HeadHunter всё ещё требует подтверждение CAPTCHA"
+            code = "browser_captcha_or_action_required"
+        elif kind == "login_required":
+            message = "Сессия HeadHunter не авторизована — войдите снова"
+            code = "browser_login_required"
+        else:
+            message = f"Не удалось подтвердить сессию HeadHunter ({kind})"
+            code = "session_probe_failed"
         return {
             "ok": False,
             "cleared": False,
-            "code": "browser_captcha_or_action_required",
+            "code": code,
             "challenge": public_challenge_view(resolved) or state,
-            "message": "HeadHunter всё ещё требует подтверждение CAPTCHA",
+            "message": message,
             "probed_url": final_url,
             "probed_title": title,
+            "probed_kind": kind,
+            "navigated_urls": navigated,
+            "validation_target": CONFIRM_SESSION_PROBE_URL,
         }
 
     clear_challenge_state(resolved)
-    # Promote session / connection when the challenge gate is gone.
     confirm_report: dict[str, Any] = {}
     try:
         from job_search_hh.session import confirm_login
@@ -618,8 +646,12 @@ def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, An
         "code": "ready",
         "challenge": None,
         "probed_url": final_url,
+        "probed_kind": kind,
+        "navigated_urls": navigated,
+        "validation_target": CONFIRM_SESSION_PROBE_URL,
         "message": "CAPTCHA подтверждена, HeadHunter доступен",
         "login_ready": login_ready,
+        "challenge_browser_state": "solved",
         "confirm_login": {
             "code": confirm_report.get("code") or confirm_report.get("status"),
             "login_ready": confirm_report.get("login_ready"),
@@ -653,30 +685,167 @@ def _challenge_handoff_process_alive(
     return False
 
 
-def _confirm_probe_urls(*, challenge_url: str) -> list[str]:
-    """URLs to verify CAPTCHA is gone without relying on a one-shot captcha link."""
-    from urllib.parse import parse_qs, unquote, urlparse
+def _challenge_cdp_endpoint(state: dict[str, Any] | None) -> str:
+    port = DEFAULT_CHALLENGE_CDP_PORT
+    if state and state.get("cdp_port"):
+        with contextlib.suppress(TypeError, ValueError):
+            port = int(state["cdp_port"])
+    env_port = (os.getenv("HH_CHALLENGE_CDP_PORT") or "").strip()
+    if env_port.isdigit():
+        port = int(env_port)
+    return f"http://127.0.0.1:{port}"
 
-    urls: list[str] = []
-    parsed = urlparse(challenge_url)
-    back = (parse_qs(parsed.query).get("backurl") or [None])[0]
-    if back:
-        decoded = unquote(str(back)).strip()
-        if decoded.startswith("http"):
-            urls.append(decoded)
-    urls.append("https://hh.ru/applicant/resumes")
-    # Keep original last — only if earlier probes are unavailable.
-    if challenge_url not in urls:
-        urls.append(challenge_url)
-    # De-dupe preserving order.
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for item in urls:
-        if item in seen:
+
+def _inspect_live_challenge_browser(
+    state: dict[str, Any] | None,
+    paths: SessionPaths,
+) -> dict[str, Any]:
+    """Observe headed challenge Chromium via CDP: active | solved | closed | unknown."""
+    if not _challenge_handoff_process_alive(state, paths):
+        from job_search_hh.session import _profile_chrome_running
+
+        if not _profile_chrome_running(paths.profile_dir):
+            return {"state": "closed", "url": "", "title": ""}
+    endpoint = _challenge_cdp_endpoint(state)
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return {"state": "unknown", "url": "", "title": "", "reason": "playwright_missing"}
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(endpoint, timeout=3_000)
+            try:
+                contexts = browser.contexts
+                pages = []
+                for ctx in contexts:
+                    pages.extend(ctx.pages)
+                if not pages:
+                    return {"state": "unknown", "url": "", "title": "", "reason": "no_pages"}
+                page = pages[-1]
+                final_url = str(page.url or "")
+                try:
+                    title = str(page.title() or "")
+                except Exception:  # noqa: BLE001
+                    title = ""
+                challenged = looks_like_hh_challenge(url=final_url, title=title)
+                if not challenged:
+                    try:
+                        from job_search_hh.vacancy_extractors import _CHALLENGE_DOM_JS
+
+                        challenged = bool(page.evaluate(_CHALLENGE_DOM_JS))
+                    except Exception:  # noqa: BLE001
+                        challenged = False
+                return {
+                    "state": "active" if challenged else "solved",
+                    "url": final_url,
+                    "title": title,
+                }
+            finally:
+                # Do not kill the operator's headed Chromium — only drop CDP.
+                disconnect = getattr(browser, "disconnect", None)
+                if callable(disconnect):
+                    with contextlib.suppress(Exception):
+                        disconnect()
+                # Older Playwright: avoid browser.close() (may tear down contexts).
+    except Exception as error:  # noqa: BLE001
+        return {
+            "state": "unknown",
+            "url": "",
+            "title": "",
+            "reason": type(error).__name__,
+        }
+
+
+def _stop_challenge_browser(state: dict[str, Any] | None, paths: SessionPaths) -> None:
+    """Best-effort stop of headed challenge Chromium; never dumps secrets."""
+    candidates: list[int] = []
+    if state and state.get("handoff_pid"):
+        with contextlib.suppress(TypeError, ValueError):
+            candidates.append(int(state["handoff_pid"]))
+    pid_path = paths.state_dir / "challenge-browser.pid"
+    if pid_path.is_file():
+        with contextlib.suppress(OSError, ValueError):
+            candidates.append(int(pid_path.read_text(encoding="utf-8").strip()))
+    seen: set[int] = set()
+    for pid in candidates:
+        if pid <= 0 or pid in seen:
             continue
-        seen.add(item)
-        ordered.append(item)
-    return ordered
+        seen.add(pid)
+        with contextlib.suppress(OSError):
+            os.kill(pid, 15)
+        for _ in range(40):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+            time.sleep(0.05)
+        with contextlib.suppress(OSError):
+            os.kill(pid, 9)
+    with contextlib.suppress(OSError):
+        pid_path.unlink()
+    from job_search_hh.session import ProfileLock
+
+    ProfileLock(paths.profile_dir).release_orphaned()
+
+
+def _probe_authenticated_session(
+    paths: SessionPaths,
+    *,
+    lock: Any,
+) -> dict[str, Any]:
+    """Probe normal authenticated HH page — never the captured challenge_url."""
+    from job_search_hh.resumes import DEFAULT_RESUMES_URL, _extract_from_page
+
+    target = DEFAULT_RESUMES_URL or CONFIRM_SESSION_PROBE_URL
+    navigated: list[str] = []
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as error:
+        raise SessionError("playwright_missing") from error
+
+    lock.acquire("challenge-confirm-probe")
+    try:
+        with sync_playwright() as playwright:
+            context = playwright.chromium.launch_persistent_context(
+                user_data_dir=str(paths.profile_dir),
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                navigated.append(target)
+                page.goto(target, wait_until="domcontentloaded", timeout=45_000)
+                page.wait_for_timeout(1_500)
+                final_url = str(page.url or "")
+                try:
+                    title = str(page.title() or "")
+                except Exception:  # noqa: BLE001
+                    title = ""
+                extracted = _extract_from_page(page)
+                kind = str(extracted.get("kind") or "invalid")
+                if looks_like_hh_challenge(url=final_url, title=title):
+                    kind = "captcha_or_action_required"
+                return {
+                    "kind": kind,
+                    "url": final_url,
+                    "title": title,
+                    "navigated_urls": navigated,
+                    "items": extracted.get("items") if isinstance(extracted, dict) else [],
+                }
+            finally:
+                context.close()
+    finally:
+        lock.release()
+
+
+def _confirm_probe_urls(*, challenge_url: str = "") -> list[str]:
+    """Post-solve validation targets (authenticated pages only).
+
+    ``challenge_url`` is accepted for call-site compatibility but intentionally
+    ignored — reopening a CAPTCHA URL recreates the challenge.
+    """
+    del challenge_url  # handoff-only; never a health-check target
+    return [CONFIRM_SESSION_PROBE_URL]
 
 
 def begin_challenge_handoff(
@@ -824,6 +993,7 @@ def public_challenge_view(paths: SessionPaths | None = None) -> dict[str, Any] |
         "capture_impl": state.get("capture_impl"),
         "challenge_session_available": bool(state.get("challenge_session_available")),
         "interactive_ready": bool(state.get("interactive_ready")),
+        "challenge_browser_state": state.get("challenge_browser_state"),
         "novnc_url": state.get("novnc_url") if recovery else None,
         "note": state.get("note"),
         "telegram_notified": bool((state.get("telegram") or {}).get("notified")),

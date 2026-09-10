@@ -73,17 +73,23 @@ class PlaywrightBrowserLauncher:
         display = (os.getenv("HH_DISPLAY") or os.getenv("DISPLAY") or "").strip()
         if not display:
             raise BrowserError("display_missing")
+        launch_args = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--window-size=1280,720",
+            "--window-position=0,0",
+        ]
+        # Challenge handoff sets HH_REMOTE_DEBUGGING_PORT so confirm can observe
+        # whether the owner already left the CAPTCHA page (without reopening it).
+        cdp_port = (os.getenv("HH_REMOTE_DEBUGGING_PORT") or "").strip()
+        if cdp_port.isdigit():
+            launch_args.append(f"--remote-debugging-port={cdp_port}")
         try:
             with sync_playwright() as playwright:
                 context = playwright.chromium.launch_persistent_context(
                     user_data_dir=str(profile_dir),
                     headless=False,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--window-size=1280,720",
-                        "--window-position=0,0",
-                    ],
+                    args=launch_args,
                     env={**os.environ, "DISPLAY": display},
                     ignore_default_args=["--enable-automation"],
                 )

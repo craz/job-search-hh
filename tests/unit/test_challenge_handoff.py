@@ -28,6 +28,7 @@ from job_search_hh.challenge_handoff import (
     public_challenge_view,
     read_challenge_state,
     write_challenge_state,
+    _confirm_probe_urls,
 )
 from job_search_hh.session import SessionError, SessionPaths, confirm_login
 from job_search_hh.vacancy_browser import STATUS_ACTION_REQUIRED, acquire_vacancies
@@ -138,9 +139,7 @@ def test_begin_handoff_persists_operator_state_without_login_action(
 ) -> None:
     paths = _paths(tmp_path)
     monkeypatch.setenv("HH_CAPTCHA_TG", "0")
-    monkeypatch.setattr(
-        "job_search_hh.challenge_handoff.interactive_display_ready", lambda: False
-    )
+    monkeypatch.setattr("job_search_hh.challenge_handoff.interactive_display_ready", lambda: False)
     monkeypatch.setattr("job_search_hh.challenge_handoff.novnc_configured", lambda: False)
     report = begin_challenge_handoff(
         challenge_url="https://hh.ru/showcaptcha?d=abc",
@@ -226,9 +225,7 @@ def test_open_challenge_alive_sets_interactive_ready(
     monkeypatch.setattr(
         "job_search_hh.challenge_handoff.require_interactive_login_runtime", lambda: None
     )
-    monkeypatch.setattr(
-        "job_search_hh.challenge_handoff.interactive_display_ready", lambda: True
-    )
+    monkeypatch.setattr("job_search_hh.challenge_handoff.interactive_display_ready", lambda: True)
     monkeypatch.setattr(
         "job_search_hh.challenge_handoff.novnc_public_url",
         lambda: "http://127.0.0.1:6080/vnc.html",
@@ -543,14 +540,112 @@ def test_confirm_refuses_while_challenge_browser_open(
         encoding="utf-8",
     )
     monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setattr("job_search_hh.session._profile_chrome_running", lambda _p: True)
     monkeypatch.setattr(
-        "job_search_hh.session._profile_chrome_running", lambda _p: True
+        "job_search_hh.challenge_handoff._inspect_live_challenge_browser",
+        lambda *_a, **_k: {
+            "state": "active",
+            "url": "https://hh.ru/account/captcha?state=1",
+            "title": "SmartCaptcha",
+        },
     )
     result = confirm_challenge_cleared(paths)
     assert result["ok"] is False
     assert result["cleared"] is False
     assert result["code"] == "challenge_browser_open"
-    assert "ещё открыто" in (result.get("message") or "")
+    assert "Решите CAPTCHA" in (result.get("message") or "")
+    assert result.get("challenge_browser_state") == "active"
+    assert read_challenge_state(paths) is not None
+
+
+def test_confirm_probe_urls_never_include_challenge_url() -> None:
+    captcha = "https://hh.ru/account/captcha?backurl=https%3A%2F%2Fhh.ru%2Fvacancy%2F1&state=x"
+    urls = _confirm_probe_urls(challenge_url=captcha)
+    assert urls == ["https://hh.ru/applicant/resumes"]
+    assert captcha not in urls
+    assert not any("captcha" in u.casefold() for u in urls)
+
+
+def test_confirm_never_navigates_to_captured_challenge_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    captcha = (
+        "https://samara.hh.ru/account/captcha?backurl=https%3A%2F%2Fsamara.hh.ru%2Fvacancy%2F1"
+    )
+    write_challenge_state(
+        challenge_url=captcha,
+        paths=paths,
+        screenshot={"screenshot_available": True, "screenshot_filename": "a.png"},
+    )
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setattr("job_search_hh.session._profile_chrome_running", lambda _p: False)
+    monkeypatch.setattr(
+        "job_search_hh.browser._clear_stale_chromium_singleton", lambda *_a, **_k: None
+    )
+    navigated: list[str] = []
+
+    def _probe(resolved: Any, *, lock: Any) -> dict[str, Any]:
+        del lock
+        target = "https://hh.ru/applicant/resumes"
+        navigated.append(target)
+        return {
+            "kind": "ok",
+            "url": target,
+            "title": "Мои резюме",
+            "navigated_urls": [target],
+            "items": [{"external_id": "abc", "title": "Dev"}],
+        }
+
+    monkeypatch.setattr("job_search_hh.challenge_handoff._probe_authenticated_session", _probe)
+    monkeypatch.setattr(
+        "job_search_hh.session.confirm_login",
+        lambda *_a, **_k: {"status": "connected", "login_ready": True, "code": "ready"},
+    )
+    monkeypatch.setattr(
+        "job_search_hh.connection.connection_status",
+        lambda: {"status": "connected", "login_ready": True, "code": "ready"},
+    )
+    result = confirm_challenge_cleared(paths)
+    assert result["ok"] is True
+    assert result["cleared"] is True
+    assert navigated == ["https://hh.ru/applicant/resumes"]
+    assert captcha not in navigated
+    assert result.get("validation_target") == "https://hh.ru/applicant/resumes"
+    assert read_challenge_state(paths) is None
+
+
+def test_confirm_keeps_state_when_session_still_challenged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    captcha = "https://hh.ru/account/captcha?state=still"
+    write_challenge_state(
+        challenge_url=captcha,
+        paths=paths,
+        screenshot={"screenshot_available": True, "screenshot_filename": "a.png"},
+    )
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setattr("job_search_hh.session._profile_chrome_running", lambda _p: False)
+    monkeypatch.setattr(
+        "job_search_hh.browser._clear_stale_chromium_singleton", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff._probe_authenticated_session",
+        lambda *_a, **_k: {
+            "kind": "captcha_or_action_required",
+            "url": "https://hh.ru/account/captcha?new=1",
+            "title": "SmartCaptcha",
+            "navigated_urls": ["https://hh.ru/applicant/resumes"],
+            "items": [],
+        },
+    )
+    result = confirm_challenge_cleared(paths)
+    assert result["ok"] is False
+    assert result["cleared"] is False
+    assert result["code"] == "browser_captcha_or_action_required"
+    assert result["navigated_urls"] == ["https://hh.ru/applicant/resumes"]
+    assert captcha not in (result.get("navigated_urls") or [])
     assert read_challenge_state(paths) is not None
 
 
@@ -559,64 +654,25 @@ def test_confirm_clears_when_browser_closed_and_challenge_gone(
 ) -> None:
     paths = _paths(tmp_path)
     write_challenge_state(
-        challenge_url="https://hh.ru/vacancy/1",
+        challenge_url="https://hh.ru/account/captcha?state=1",
         paths=paths,
         screenshot={"screenshot_available": True, "screenshot_filename": "a.png"},
     )
     monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
-    monkeypatch.setattr(
-        "job_search_hh.session._profile_chrome_running", lambda _p: False
-    )
+    monkeypatch.setattr("job_search_hh.session._profile_chrome_running", lambda _p: False)
     monkeypatch.setattr(
         "job_search_hh.browser._clear_stale_chromium_singleton", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        "job_search_hh.challenge_handoff.looks_like_hh_challenge",
-        lambda **_k: False,
+        "job_search_hh.challenge_handoff._probe_authenticated_session",
+        lambda *_a, **_k: {
+            "kind": "ok",
+            "url": "https://hh.ru/applicant/resumes",
+            "title": "Resumes",
+            "navigated_urls": ["https://hh.ru/applicant/resumes"],
+            "items": [{"external_id": "r1", "title": "T"}],
+        },
     )
-
-    class _Page:
-        url = "https://hh.ru/vacancy/1"
-
-        def goto(self, *_a, **_k):
-            return None
-
-        def wait_for_timeout(self, *_a, **_k):
-            return None
-
-        def title(self):
-            return "Vacancy"
-
-        def evaluate(self, *_a, **_k):
-            return False
-
-    class _Ctx:
-        pages: list[Any] = []
-
-        def new_page(self):
-            return _Page()
-
-        def close(self):
-            return None
-
-    class _Browser:
-        def launch_persistent_context(self, **_k):
-            return _Ctx()
-
-    class _Pw:
-        chromium = _Browser()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_a):
-            return False
-
-    fake_sync = types.ModuleType("playwright.sync_api")
-    fake_sync.sync_playwright = lambda: _Pw()  # type: ignore[attr-defined]
-    fake_root = types.ModuleType("playwright")
-    monkeypatch.setitem(sys.modules, "playwright", fake_root)
-    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync)
     monkeypatch.setattr(
         "job_search_hh.session.confirm_login",
         lambda *_a, **_k: {"status": "connected", "login_ready": True, "code": "ready"},
@@ -631,6 +687,75 @@ def test_confirm_clears_when_browser_closed_and_challenge_gone(
     assert result["code"] == "ready"
     assert "доступен" in (result.get("message") or "")
     assert read_challenge_state(paths) is None
+
+
+def test_confirm_solved_in_open_browser_stops_then_probes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    write_challenge_state(
+        challenge_url="https://hh.ru/account/captcha?state=1",
+        paths=paths,
+        screenshot={"screenshot_available": True, "screenshot_filename": "a.png"},
+    )
+    state = read_challenge_state(paths) or {}
+    state["handoff_pid"] = 424242
+    (paths.state_dir / "challenge_active.json").write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    live = {"chrome": True}
+
+    def _chrome(_p: Any) -> bool:
+        return bool(live["chrome"])
+
+    monkeypatch.setattr("job_search_hh.session._profile_chrome_running", _chrome)
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff._challenge_handoff_process_alive",
+        lambda *_a, **_k: live["chrome"],
+    )
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff._inspect_live_challenge_browser",
+        lambda *_a, **_k: {
+            "state": "solved",
+            "url": "https://hh.ru/vacancy/1",
+            "title": "Vacancy",
+        },
+    )
+
+    stopped: list[bool] = []
+
+    def _stop(*_a: Any, **_k: Any) -> None:
+        stopped.append(True)
+        live["chrome"] = False
+
+    monkeypatch.setattr("job_search_hh.challenge_handoff._stop_challenge_browser", _stop)
+    monkeypatch.setattr(
+        "job_search_hh.browser._clear_stale_chromium_singleton", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff._probe_authenticated_session",
+        lambda *_a, **_k: {
+            "kind": "ok",
+            "url": "https://hh.ru/applicant/resumes",
+            "title": "Resumes",
+            "navigated_urls": ["https://hh.ru/applicant/resumes"],
+            "items": [],
+        },
+    )
+    monkeypatch.setattr(
+        "job_search_hh.session.confirm_login",
+        lambda *_a, **_k: {"status": "connected", "login_ready": True, "code": "ready"},
+    )
+    monkeypatch.setattr(
+        "job_search_hh.connection.connection_status",
+        lambda: {"status": "connected", "login_ready": True, "code": "ready"},
+    )
+    result = confirm_challenge_cleared(paths)
+    assert stopped == [True]
+    assert result["cleared"] is True
+    assert result.get("validation_target") == "https://hh.ru/applicant/resumes"
 
 
 def test_open_challenge_rejects_missing_url(tmp_path: Path) -> None:
