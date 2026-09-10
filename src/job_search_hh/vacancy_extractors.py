@@ -16,14 +16,67 @@ from job_search_hh.vacancy_dto import (
     allowlist_summary,
 )
 
-EXTRACTOR_VERSION = "hh-browser-vacancy-ro-v1"
+EXTRACTOR_VERSION = "hh-browser-vacancy-ro-v2"
 
 _VACANCY_ID_RE = re.compile(r"/vacancy/(\d+)")
+
+# Stable HH challenge URL/host markers (SmartCaptcha / showcaptcha / challenge gates).
+_CHALLENGE_URL_RE = re.compile(
+    r"showcaptcha|smartcaptcha|/captcha(?:[/?]|$)|challenge|"
+    r"checkcaptcha|hcaptcha|recaptcha",
+    re.IGNORECASE,
+)
+_CHALLENGE_TITLE_RE = re.compile(
+    r"captcha|smartcaptcha|подтвердите.*что\s+вы\s+не\s+робот|"
+    r"are you (?:a )?robot|verify you are human|"
+    r"доступ ограничен|attention required",
+    re.IGNORECASE,
+)
+
+
+def looks_like_hh_challenge(*, url: str = "", title: str = "") -> bool:
+    """True when URL/title indicate an HH CAPTCHA / bot-challenge gate."""
+    if url and _CHALLENGE_URL_RE.search(url):
+        return True
+    if title and _CHALLENGE_TITLE_RE.search(title):
+        return True
+    return False
+
+
+_CHALLENGE_DOM_JS = """() => {
+  const href = String(location.href || '');
+  if (/showcaptcha|smartcaptcha|\\/captcha(?:[/?]|$)|challenge|checkcaptcha/i.test(href)) {
+    return true;
+  }
+  const title = String(document.title || '');
+  if (/captcha|smartcaptcha|робот|robot|verify you are human|доступ ограничен/i.test(title)) {
+    return true;
+  }
+  const qa = (sel) => document.querySelector(sel);
+  if (qa(
+    '[data-qa="account-captcha"], [data-qa="captcha"], ' +
+    '.bloko-captcha, iframe[src*="captcha"], iframe[src*="smartcaptcha"], ' +
+    '.SmartCaptcha, [class*="SmartCaptcha"], #checkbox-captcha, ' +
+    '[class*="Captcha"], form[action*="captcha"]'
+  )) {
+    return true;
+  }
+  const bodyText = ((document.body && document.body.innerText) || '').slice(0, 4000);
+  if (/я\\s+не\\s+робот|are you a robot|smartcaptcha|подтвердите,?\\s*что\\s+вы\\s+человек/i.test(bodyText)) {
+    return true;
+  }
+  return false;
+}"""
+
 
 SEARCH_EXTRACT_JS = """() => {
   const text = (el) =>
     el ? (el.textContent || '').trim().replace(/\\s+/g, ' ') : '';
   const qa = (sel) => document.querySelector(sel);
+  const href = String(location.href || '');
+  if (/showcaptcha|smartcaptcha|\\/captcha(?:[/?]|$)|challenge|checkcaptcha/i.test(href)) {
+    return { kind: 'captcha_or_action_required', items: [], meta: { challenge_url: href } };
+  }
 
   if (qa(
     '[data-qa="account-login-form"], ' +
@@ -33,9 +86,15 @@ SEARCH_EXTRACT_JS = """() => {
   }
   if (qa(
     '[data-qa="account-captcha"], [data-qa="captcha"], ' +
-    '.bloko-captcha, iframe[src*="captcha"]'
+    '.bloko-captcha, iframe[src*="captcha"], iframe[src*="smartcaptcha"], ' +
+    '.SmartCaptcha, [class*="SmartCaptcha"], #checkbox-captcha, ' +
+    '[class*="Captcha"], form[action*="captcha"]'
   )) {
-    return { kind: 'captcha_or_action_required', items: [], meta: {} };
+    return { kind: 'captcha_or_action_required', items: [], meta: { challenge_url: href } };
+  }
+  const bodyText = ((document.body && document.body.innerText) || '').slice(0, 4000);
+  if (/я\\s+не\\s+робот|are you a robot|smartcaptcha|подтвердите,?\\s*что\\s+вы\\s+человек/i.test(bodyText)) {
+    return { kind: 'captcha_or_action_required', items: [], meta: { challenge_url: href } };
   }
   if (qa('[data-qa="error-forbidden"], [data-qa="vacancy-forbidden"]')) {
     return { kind: 'permission_blocked', items: [], meta: {} };
@@ -142,6 +201,10 @@ DETAIL_EXTRACT_JS = """() => {
   const text = (el) =>
     el ? (el.textContent || '').trim().replace(/\\s+/g, ' ') : '';
   const qa = (sel) => document.querySelector(sel);
+  const href = String(location.href || '');
+  if (/showcaptcha|smartcaptcha|\\/captcha(?:[/?]|$)|challenge|checkcaptcha/i.test(href)) {
+    return { kind: 'captcha_or_action_required', content: {}, meta: { challenge_url: href } };
+  }
 
   if (qa(
     '[data-qa="account-login-form"], ' +
@@ -151,9 +214,15 @@ DETAIL_EXTRACT_JS = """() => {
   }
   if (qa(
     '[data-qa="account-captcha"], [data-qa="captcha"], ' +
-    '.bloko-captcha, iframe[src*="captcha"]'
+    '.bloko-captcha, iframe[src*="captcha"], iframe[src*="smartcaptcha"], ' +
+    '.SmartCaptcha, [class*="SmartCaptcha"], #checkbox-captcha, ' +
+    '[class*="Captcha"], form[action*="captcha"]'
   )) {
-    return { kind: 'captcha_or_action_required', content: {} };
+    return { kind: 'captcha_or_action_required', content: {}, meta: { challenge_url: href } };
+  }
+  const bodyText = ((document.body && document.body.innerText) || '').slice(0, 4000);
+  if (/я\\s+не\\s+робот|are you a robot|smartcaptcha|подтвердите,?\\s*что\\s+вы\\s+человек/i.test(bodyText)) {
+    return { kind: 'captcha_or_action_required', content: {}, meta: { challenge_url: href } };
   }
   if (qa('[data-qa="error-forbidden"], [data-qa="vacancy-forbidden"]')) {
     return { kind: 'permission_blocked', content: {} };
@@ -306,9 +375,29 @@ def normalize_detail_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def extract_search_page(page: Any) -> dict[str, Any]:
     """Run SERP allowlist extract on a Playwright page."""
     final_url = str(getattr(page, "url", "") or "")
+    title = ""
+    try:
+        title = str(page.title() or "")
+    except Exception:  # noqa: BLE001 - title is best-effort challenge signal
+        title = ""
+    if looks_like_hh_challenge(url=final_url, title=title):
+        return {
+            "kind": "captcha_or_action_required",
+            "items": [],
+            "meta": {"challenge_url": final_url, "challenge_title": title},
+        }
     path = urlparse(final_url).path.lower()
     if "/account/login" in path or path == "/login":
         return {"kind": "login_required", "items": [], "meta": {}}
+    try:
+        if bool(page.evaluate(_CHALLENGE_DOM_JS)):
+            return {
+                "kind": "captcha_or_action_required",
+                "items": [],
+                "meta": {"challenge_url": final_url, "challenge_title": title},
+            }
+    except Exception:  # noqa: BLE001
+        pass
     payload = page.evaluate(SEARCH_EXTRACT_JS)
     if not isinstance(payload, dict):
         return {"kind": "invalid", "items": [], "meta": {}}
@@ -318,9 +407,29 @@ def extract_search_page(page: Any) -> dict[str, Any]:
 def extract_detail_page(page: Any) -> dict[str, Any]:
     """Run detail allowlist extract on a Playwright page."""
     final_url = str(getattr(page, "url", "") or "")
+    title = ""
+    try:
+        title = str(page.title() or "")
+    except Exception:  # noqa: BLE001
+        title = ""
+    if looks_like_hh_challenge(url=final_url, title=title):
+        return {
+            "kind": "captcha_or_action_required",
+            "content": {},
+            "meta": {"challenge_url": final_url, "challenge_title": title},
+        }
     path = urlparse(final_url).path.lower()
     if "/account/login" in path or path == "/login":
         return {"kind": "login_required", "content": {}}
+    try:
+        if bool(page.evaluate(_CHALLENGE_DOM_JS)):
+            return {
+                "kind": "captcha_or_action_required",
+                "content": {},
+                "meta": {"challenge_url": final_url, "challenge_title": title},
+            }
+    except Exception:  # noqa: BLE001
+        pass
     payload = page.evaluate(DETAIL_EXTRACT_JS)
     if not isinstance(payload, dict):
         return {"kind": "invalid", "content": {}}

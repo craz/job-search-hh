@@ -27,6 +27,7 @@ from job_search_hh.vacancy_extractors import (
     EXTRACTOR_VERSION,
     extract_detail_page,
     extract_search_page,
+    looks_like_hh_challenge,
     normalize_detail_payload,
     normalize_search_payload,
 )
@@ -275,6 +276,40 @@ def _read_vacancy_pages(
                     detail_url = DEFAULT_VACANCY_URL_TEMPLATE.format(external_id=external_id)
                     try:
                         page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                        # Fail-fast on challenge URL/title before spending the full settle wait.
+                        final_url = str(getattr(page, "url", "") or "")
+                        page_title = ""
+                        try:
+                            page_title = str(page.title() or "")
+                        except Exception:  # noqa: BLE001
+                            page_title = ""
+                        if looks_like_hh_challenge(url=final_url, title=page_title):
+                            if on_page_progress is not None:
+                                try:
+                                    on_page_progress(
+                                        {
+                                            "pages_fetched": len(pages_out),
+                                            "pages_planned": pages_planned,
+                                            "page_from": page_from,
+                                            "page_current": (
+                                                pages_out[-1]["page"] if pages_out else page_from
+                                            ),
+                                            "checked_count": len(set(summaries_for_detail)),
+                                            "phase": "captcha_required",
+                                            "challenge_url": final_url,
+                                            "challenge_vacancy_id": external_id,
+                                        }
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            return {
+                                "kind": "captcha_or_action_required",
+                                "pages": pages_out,
+                                "details": details_out,
+                                "wall_detail_id": external_id,
+                                "challenge_url": final_url,
+                                "challenge_title": page_title,
+                            }
                         page.wait_for_timeout(min(2_000, max(500, timeout_ms // 25)))
                         raw_detail = extract_detail_page(page)
                     except Exception as error:  # noqa: BLE001
@@ -310,11 +345,39 @@ def _read_vacancy_pages(
                         "captcha_or_action_required",
                         "permission_blocked",
                     }:
+                        if kind == "captcha_or_action_required" and on_page_progress is not None:
+                            try:
+                                meta = (
+                                    (raw_detail or {}).get("meta")
+                                    if isinstance(raw_detail, dict)
+                                    else {}
+                                )
+                                challenge_url = ""
+                                if isinstance(meta, dict):
+                                    challenge_url = str(meta.get("challenge_url") or "")
+                                on_page_progress(
+                                    {
+                                        "pages_fetched": len(pages_out),
+                                        "pages_planned": pages_planned,
+                                        "page_from": page_from,
+                                        "page_current": (
+                                            pages_out[-1]["page"] if pages_out else page_from
+                                        ),
+                                        "checked_count": len(set(summaries_for_detail)),
+                                        "phase": "captcha_required",
+                                        "challenge_url": challenge_url
+                                        or str(getattr(page, "url", "") or ""),
+                                        "challenge_vacancy_id": external_id,
+                                    }
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
                         return {
                             "kind": kind,
                             "pages": pages_out,
                             "details": details_out,
                             "wall_detail_id": external_id,
+                            "challenge_url": str(getattr(page, "url", "") or ""),
                         }
                     normalized_detail = normalize_detail_payload(
                         raw_detail if isinstance(raw_detail, dict) else {}
@@ -619,6 +682,7 @@ def acquire_vacancies(
                 "status": STATUS_ACTION_REQUIRED,
                 "code": "browser_captcha_or_action_required",
                 "action": {"code": "confirm_login", "novnc_url": _novnc_url()},
+                "challenge_url": raw.get("challenge_url"),
             }
         )
     if wall == "permission_blocked" and ok_pages == 0:
@@ -677,9 +741,11 @@ def acquire_vacancies(
         return with_recovery(
             {
                 **report,
-                "status": STATUS_PARTIAL,
+                "status": STATUS_ACTION_REQUIRED,
                 "code": "browser_captcha_or_action_required",
                 "action": {"code": "confirm_login", "novnc_url": _novnc_url()},
+                "challenge_url": raw.get("challenge_url"),
+                "wall_detail_id": raw.get("wall_detail_id"),
             }
         )
     if wall == "permission_blocked":

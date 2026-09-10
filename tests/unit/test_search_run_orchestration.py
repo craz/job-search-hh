@@ -154,6 +154,14 @@ class FakeCore:
         items = list(self.items[run_id])
         return {"items": items, "total": len(items)}
 
+    def update_search_run_progress(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        run = self.runs[run_id]
+        progress = dict(run.get("progress") or {})
+        progress.update(payload)
+        progress["last_progress_at"] = "2026-09-10T14:00:00+00:00"
+        run["progress"] = progress
+        return dict(run)
+
 
 def _detail(external_id: str, *, ok: bool = True) -> dict[str, Any]:
     if not ok:
@@ -451,7 +459,7 @@ def test_action_required_before_work_failed() -> None:
             "details": [],
             "pagination": {},
             "action": {"code": "confirm_login"},
-            "recovery": {"kind": "action_required"},
+            "recovery": {"kind": "captcha_or_action_required"},
         }
 
     report = run_vacancy_search(
@@ -462,6 +470,64 @@ def test_action_required_before_work_failed() -> None:
     assert report["status"] == "failed"
     assert report["search_run"]["status"] == "failed"
     assert report["code"] == "browser_captcha_or_action_required"
+
+
+def test_mid_run_captcha_persists_distinct_error_not_detail_failed() -> None:
+    core = FakeCore()
+
+    def acquire_fn(*_a: Any, **_k: Any) -> dict[str, Any]:
+        return {
+            "status": STATUS_ACTION_REQUIRED,
+            "code": "browser_captcha_or_action_required",
+            "pages": [{"page": 0, "status": "ok", "items": []}],
+            "summaries": [
+                {
+                    "external_id": "1001",
+                    "title": "A",
+                    "url": "https://hh.ru/vacancy/1001",
+                    "source_page": 0,
+                },
+                {
+                    "external_id": "1002",
+                    "title": "B",
+                    "url": "https://hh.ru/vacancy/1002",
+                    "source_page": 0,
+                },
+            ],
+            "details": [
+                {
+                    "external_id": "1001",
+                    "status": "ok",
+                    "content": {
+                        "external_id": "1001",
+                        "title": "A",
+                        "description": "Full description for 1001 scoring-ready.",
+                        "url": "https://hh.ru/vacancy/1001",
+                        "employer_id": "42",
+                        "employer_name": "X",
+                        "area_text": "Москва",
+                    },
+                }
+            ],
+            "pagination": {"pages_fetched": 1, "page_from": 0, "page_to": 0},
+            "action": {"code": "confirm_login", "novnc_url": "http://127.0.0.1:6080/vnc.html"},
+            "recovery": {"kind": "captcha_or_action_required"},
+            "challenge_url": "https://hh.ru/showcaptcha",
+            "wall_detail_id": "1002",
+        }
+
+    report = run_vacancy_search(
+        search_profile_id=core.profile["id"],
+        core=core,  # type: ignore[arg-type]
+        acquire_fn=acquire_fn,
+    )
+    assert report["status"] == STATUS_ACTION_REQUIRED
+    assert report["code"] == "browser_captcha_or_action_required"
+    assert report["search_run"]["status"] == "partial"
+    assert report["search_run"]["error_code"] == "browser_captcha_or_action_required"
+    assert report["action"]["code"] == "confirm_login"
+    assert report["code"] != "vacancy_detail_failed"
+    assert report["code"] != "browser_proxy_unavailable"
 
 
 def test_repeat_run_unchanged_and_new_run_id() -> None:

@@ -34,6 +34,13 @@ from job_search_hh.vacancy_query import MAX_START_PAGE, ExecutionPolicy, SearchC
 
 AcquireFn = Callable[..., dict[str, Any]]
 
+_CAPTCHA_ACQUIRE_CODES = frozenset(
+    {
+        "browser_captcha_or_action_required",
+        "captcha_required",
+    }
+)
+
 _BLOCKING_ACQUIRE = frozenset(
     {
         STATUS_NOT_AUTHORIZED,
@@ -46,6 +53,20 @@ _BLOCKING_ACQUIRE = frozenset(
 
 def _utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _is_captcha_acquire(*, status: str, code: str) -> bool:
+    """True when acquire stopped on HH CAPTCHA / challenge (operator action)."""
+    if code in _CAPTCHA_ACQUIRE_CODES:
+        return True
+    return status == STATUS_ACTION_REQUIRED and code in _CAPTCHA_ACQUIRE_CODES
+
+
+def _terminal_for_captcha(*, ok_pages: int, item_ok: int) -> tuple[str, str]:
+    """SearchRun terminal + error_code when CAPTCHA interrupted acquisition."""
+    if ok_pages == 0 and item_ok == 0:
+        return "failed", "browser_captcha_or_action_required"
+    return "partial", "browser_captcha_or_action_required"
 
 
 def criteria_from_snapshot(snapshot: dict[str, Any]) -> SearchCriteria:
@@ -405,7 +426,10 @@ def run_vacancy_search(
     # intentional max_pages bound alone is success, not partial.
 
     # Terminal status matrix.
-    if ok_pages == 0 and (failed_pages > 0 or acquire_status in _BLOCKING_ACQUIRE):
+    captcha_hit = _is_captcha_acquire(status=acquire_status, code=acquire_code)
+    if captcha_hit:
+        terminal, error_code = _terminal_for_captcha(ok_pages=ok_pages, item_ok=item_ok)
+    elif ok_pages == 0 and (failed_pages > 0 or acquire_status in _BLOCKING_ACQUIRE):
         terminal = "failed"
         error_code = acquire_code or "search_page_failed"
     elif item_ok == 0 and item_errors == 0 and ok_pages > 0:
@@ -444,11 +468,12 @@ def run_vacancy_search(
             }
         )
 
+    response_status = STATUS_ACTION_REQUIRED if captcha_hit else terminal
     return with_recovery(
         {
             **base,
-            "ok": terminal in {"success", "partial"},
-            "status": terminal,
+            "ok": (not captcha_hit) and terminal in {"success", "partial"},
+            "status": response_status,
             "code": error_code or ("ready" if terminal == "success" else terminal),
             "action": acquisition.get("action") or {"code": "none"},
             "recovery": acquisition.get("recovery"),
@@ -819,6 +844,7 @@ def run_resume_suitable_search(
     details = _detail_map(
         [d for d in list(acquisition.get("details") or []) if isinstance(d, dict)]
     )
+    captcha_hit = _is_captcha_acquire(status=acquire_status, code=acquire_code)
     _report_progress(
         {
             "pages_fetched": int(page_meta.get("pages_fetched") or len(pages) or 0),
@@ -827,7 +853,9 @@ def run_resume_suitable_search(
             "page_current": page_meta.get("page_to", page0),
             "checked_count": len(summaries),
             "source_total": source_total,
-            "phase": "ingest",
+            "phase": "captcha_required" if captcha_hit else "ingest",
+            "challenge_url": acquisition.get("challenge_url"),
+            "challenge_vacancy_id": acquisition.get("wall_detail_id"),
         }
     )
     recorded_items, item_ok, item_errors = _process_unique_items(
@@ -835,7 +863,9 @@ def run_resume_suitable_search(
     )
     base["items"] = recorded_items
 
-    if ok_pages == 0 and (failed_pages > 0 or acquire_status in _BLOCKING_ACQUIRE):
+    if captcha_hit:
+        terminal, error_code = _terminal_for_captcha(ok_pages=ok_pages, item_ok=item_ok)
+    elif ok_pages == 0 and (failed_pages > 0 or acquire_status in _BLOCKING_ACQUIRE):
         terminal = "failed"
         error_code = acquire_code or "search_page_failed"
     elif item_ok == 0 and item_errors == 0 and ok_pages > 0:
@@ -873,11 +903,12 @@ def run_resume_suitable_search(
             }
         )
 
+    response_status = STATUS_ACTION_REQUIRED if captcha_hit else terminal
     return with_recovery(
         {
             **base,
-            "ok": terminal in {"success", "partial"},
-            "status": terminal,
+            "ok": (not captcha_hit) and terminal in {"success", "partial"},
+            "status": response_status,
             "code": error_code or ("ready" if terminal == "success" else terminal),
             "action": acquisition.get("action") or {"code": "none"},
             "recovery": acquisition.get("recovery"),
