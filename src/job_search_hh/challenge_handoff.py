@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -31,6 +32,8 @@ from job_search_hh.session import (
     require_interactive_login_runtime,
 )
 from job_search_hh.vacancy_extractors import looks_like_hh_challenge
+
+logger = logging.getLogger(__name__)
 
 CHALLENGE_STATE_NAME = "challenge_active.json"
 CHALLENGE_DIR_NAME = "challenges"
@@ -92,6 +95,8 @@ CAPTURE_OK = "captured"  # A
 CAPTURE_NO_SCREENSHOT = "captured_no_screenshot"  # B
 CAPTURE_FAILED = "capture_failed"  # C
 ACTION_CHALLENGE_CAPTURE_FAILED = "challenge_capture_failed"
+# Bumped when capture/handoff contract changes; written into challenge_active.
+CAPTURE_IMPL_ID = "capture-v2-persist-before-close"
 
 
 def classify_capture(*, challenge_url: str, screenshot: dict[str, Any] | None) -> str:
@@ -103,6 +108,22 @@ def classify_capture(*, challenge_url: str, screenshot: dict[str, Any] | None) -
     if shot.get("screenshot_available"):
         return CAPTURE_OK
     return CAPTURE_NO_SCREENSHOT
+
+
+def recovery_available_from_state(
+    state: dict[str, Any] | None, *, url_fallback: str = ""
+) -> bool:
+    """True when operator noVNC recovery may be offered.
+
+    Legacy states (pre-capture-v2) omit ``recovery_available``; infer from URL so
+    Web/API never strip a real challenge_url after a code upgrade.
+    """
+    if not state:
+        return bool((url_fallback or "").strip())
+    if "recovery_available" in state and state.get("recovery_available") is not None:
+        return bool(state.get("recovery_available"))
+    url = str(state.get("challenge_url") or url_fallback or "").strip()
+    return bool(url)
 
 
 def capture_challenge_screenshot(page: Any, *, paths: SessionPaths | None = None) -> dict[str, Any]:
@@ -158,6 +179,7 @@ def write_challenge_state(
         "screenshot_error_detail": shot.get("screenshot_error_detail"),
         "capture_status": status,
         "recovery_available": recovery_available,
+        "capture_impl": CAPTURE_IMPL_ID,
         "challenge_session_available": False,
         "handoff_pid": None,
         "novnc_url": (
@@ -236,6 +258,17 @@ def capture_and_persist_live_challenge(
             json.dumps(state, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+    logger.info(
+        "hh_captcha_capture impl=%s status=%s url_present=%s screenshot=%s "
+        "vacancy_id=%s run_id=%s shot_error=%s",
+        CAPTURE_IMPL_ID,
+        state.get("capture_status"),
+        bool(url),
+        bool(state.get("screenshot_available")),
+        vacancy_id,
+        run_id,
+        screenshot.get("screenshot_error"),
+    )
     return {
         "challenge_url": url,
         "challenge_title": title,
@@ -243,6 +276,7 @@ def capture_and_persist_live_challenge(
         "challenge": state,
         "recovery_available": bool(state.get("recovery_available")),
         "capture_status": state.get("capture_status"),
+        "capture_impl": CAPTURE_IMPL_ID,
     }
 
 def notify_challenge_telegram(state: dict[str, Any]) -> dict[str, Any]:
@@ -347,7 +381,7 @@ def open_challenge_browser(
     url = (challenge_url or state.get("challenge_url") or "").strip()
     if not url:
         raise SessionError("challenge_url_missing")
-    if state and state.get("recovery_available") is False:
+    if not recovery_available_from_state(state, url_fallback=url):
         raise SessionError("challenge_url_missing")
     if "/account/login" in url and "showcaptcha" not in url.casefold():
         raise SessionError("challenge_url_is_login")
@@ -585,8 +619,21 @@ def begin_challenge_handoff(
     notify = notify_challenge_telegram(state)
     opened = False
     open_error = None
-    recovery = bool(state.get("recovery_available"))
     effective_url = str(state.get("challenge_url") or url).strip()
+    if "recovery_available" not in state or state.get("recovery_available") is None:
+        state["recovery_available"] = recovery_available_from_state(
+            state, url_fallback=effective_url
+        )
+        state["capture_status"] = state.get("capture_status") or classify_capture(
+            challenge_url=effective_url,
+            screenshot={
+                "screenshot_available": state.get("screenshot_available"),
+                "screenshot_error": state.get("screenshot_error"),
+            },
+        )
+        state["capture_impl"] = state.get("capture_impl") or CAPTURE_IMPL_ID
+    recovery = recovery_available_from_state(state, url_fallback=effective_url)
+    state["recovery_available"] = recovery
     if (
         auto_open_browser
         and recovery
@@ -639,8 +686,8 @@ def public_challenge_view(paths: SessionPaths | None = None) -> dict[str, Any] |
     state = read_challenge_state(paths)
     if not state:
         return None
-    recovery = bool(state.get("recovery_available"))
-    url = state.get("challenge_url")
+    url = str(state.get("challenge_url") or "").strip() or None
+    recovery = recovery_available_from_state(state, url_fallback=url or "")
     return {
         "status": state.get("status"),
         "code": state.get("code"),
@@ -652,8 +699,13 @@ def public_challenge_view(paths: SessionPaths | None = None) -> dict[str, Any] |
         "progress": state.get("progress") or {},
         "screenshot_available": bool(state.get("screenshot_available")),
         "screenshot_error": state.get("screenshot_error"),
-        "capture_status": state.get("capture_status"),
+        "capture_status": state.get("capture_status")
+        or classify_capture(
+            challenge_url=url or "",
+            screenshot={"screenshot_available": state.get("screenshot_available")},
+        ),
         "recovery_available": recovery,
+        "capture_impl": state.get("capture_impl"),
         "challenge_session_available": bool(state.get("challenge_session_available")),
         "interactive_ready": bool(state.get("interactive_ready")),
         "novnc_url": state.get("novnc_url") if recovery else None,

@@ -412,6 +412,116 @@ def test_mid_details_captcha_stops_and_handoff_action(
     assert report["code"] != "browser_proxy_unavailable"
 
 
+def test_public_view_infers_recovery_from_legacy_state_without_flag(tmp_path: Path) -> None:
+    """Legacy challenge_active (no recovery_available) must still expose URL."""
+    paths = _paths(tmp_path)
+    paths.ensure()
+    raw = {
+        "status": "operator_action_required",
+        "code": "browser_captcha_or_action_required",
+        "detected_at": "2026-09-10T16:28:37Z",
+        "challenge_url": "https://hh.ru/account/captcha?backurl=https%3A%2F%2Fhh.ru%2Fvacancy%2F1",
+        "challenge_title": "Подтвердите, что вы не робот",
+        "screenshot_available": True,
+        "screenshot_filename": "captcha.png",
+        "progress": {"checked_count": 250},
+    }
+    (paths.state_dir / "challenge_active.json").write_text(
+        __import__("json").dumps(raw, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (paths.state_dir / "challenges").mkdir(parents=True, exist_ok=True)
+    (paths.state_dir / "challenges" / "captcha.png").write_bytes(b"\x89PNG")
+    view = public_challenge_view(paths)
+    assert view is not None
+    assert view["recovery_available"] is True
+    assert "account/captcha" in (view["challenge_url"] or "")
+    assert view["screenshot_available"] is True
+
+
+def test_acquire_orchestration_path_persists_state_for_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Suitable-style acquire → real state writer → public API view reads same files."""
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setenv("HH_CAPTCHA_TG", "0")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+
+    def reader(**_kwargs: Any) -> dict[str, Any]:
+        page = _ShotPage(url="https://hh.ru/account/captcha?state=abc", title="SmartCaptcha")
+        evidence = capture_and_persist_live_challenge(
+            page,
+            vacancy_id="137221568",
+            progress={"pages_fetched": 5, "pages_planned": 5, "checked_count": 250},
+            paths=paths,
+        )
+        return {
+            "kind": "captcha_or_action_required",
+            "pages": [
+                {
+                    "page": 0,
+                    "status": "ok",
+                    "url": "https://hh.ru/search/vacancy",
+                    "items": [
+                        {
+                            "external_id": "137221568",
+                            "title": "A",
+                            "url": "https://hh.ru/vacancy/137221568",
+                            "employer_name": "X",
+                        }
+                    ],
+                    "meta": {"found_text": "Найдено 1"},
+                }
+            ],
+            "details": [],
+            "wall_detail_id": "137221568",
+            "challenge_url": evidence["challenge_url"],
+            "challenge_title": evidence["challenge_title"],
+            "screenshot": evidence["screenshot"],
+            "challenge": evidence["challenge"],
+        }
+
+    report = acquire_vacancies(
+        SearchCriteria(text="python"),
+        ExecutionPolicy(max_pages=1),
+        paths=paths,
+        page_reader=reader,
+        fetch_details=True,
+        detail_limit=10,
+    )
+    assert report["status"] == STATUS_ACTION_REQUIRED
+    assert report["action"]["code"] == ACTION_OPEN_CHALLENGE
+    state = read_challenge_state(paths)
+    assert state is not None
+    assert state["challenge_url"]
+    assert state["screenshot_available"] is True
+    assert (paths.state_dir / "challenges" / state["screenshot_filename"]).is_file()
+    view = public_challenge_view(paths)
+    assert view is not None
+    assert view["challenge_url"] == state["challenge_url"]
+    assert view["screenshot_available"] is True
+    assert view["recovery_available"] is True
+
+
+def test_capture_ordering_persist_before_simulated_close(tmp_path: Path) -> None:
+    events: list[str] = []
+    paths = _paths(tmp_path)
+
+    class _OrderedPage(_ShotPage):
+        def screenshot(self, *, path: str, full_page: bool = False) -> None:
+            events.append("screenshot")
+            super().screenshot(path=path, full_page=full_page)
+
+    page = _OrderedPage(url="https://hh.ru/showcaptcha?d=ord")
+    evidence = capture_and_persist_live_challenge(page, paths=paths)
+    events.append("state_written")
+    events.append("context_close")
+    assert evidence["challenge_url"]
+    assert events == ["screenshot", "state_written", "context_close"]
+    assert read_challenge_state(paths) is not None
+
+
 def test_open_challenge_rejects_missing_url(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     write_challenge_state(

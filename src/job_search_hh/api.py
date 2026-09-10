@@ -408,6 +408,13 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     """Run the internal Compose HTTP service for connection status."""
+    import logging
+
+    from job_search_hh.challenge_handoff import CAPTURE_IMPL_ID
+
+    logging.getLogger("job_search_hh").info(
+        "hh_api_start capture_impl=%s", CAPTURE_IMPL_ID
+    )
     port = int(os.getenv("HH_API_PORT", os.getenv("JOB_SEARCH_HH_API_PORT", "8092")))
     ThreadingHTTPServer(("0.0.0.0", port), ApiHandler).serve_forever()
 
