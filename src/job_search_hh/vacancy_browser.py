@@ -200,6 +200,7 @@ def _read_vacancy_pages(
     detail_limit: int = 0,
     on_page_progress: Callable[[dict[str, Any]], None] | None = None,
     detail_id_filter: Callable[[list[str]], list[str]] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Open persistent Chromium profile and fetch SERP pages + optional details.
 
@@ -229,8 +230,12 @@ def _read_vacancy_pages(
         *,
         vacancy_id: str | None = None,
         challenge_url_hint: str | None = None,
+        matched_signals: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Capture URL/title/PNG and write challenge_active before context.close."""
+        """Capture URL/title/PNG and write challenge_active before context.close.
+
+        Uses the exact ``page`` the detector fired on (never pages[-1]).
+        """
         from job_search_hh.challenge_handoff import capture_and_persist_live_challenge
 
         progress = {
@@ -244,8 +249,10 @@ def _read_vacancy_pages(
         return capture_and_persist_live_challenge(
             page,
             challenge_url_hint=challenge_url_hint,
+            run_id=run_id,
             vacancy_id=vacancy_id,
             progress=progress,
+            matched_signals=matched_signals,
         )
 
     def _emit_page_progress(page_index: int) -> None:
@@ -338,10 +345,34 @@ def _read_vacancy_pages(
                     }
                     if kind == "captcha_or_action_required":
                         try:
+                            meta_obj = normalized.get("meta") if isinstance(normalized, dict) else {}
+                            serp_signals: list[str] = []
+                            if isinstance(meta_obj, dict):
+                                raw_sigs = meta_obj.get("matched_signals") or []
+                                if isinstance(raw_sigs, list):
+                                    serp_signals = [str(s) for s in raw_sigs if s]
                             evidence = _persist_captcha_before_close(
                                 page,
                                 challenge_url_hint=wall_payload["challenge_url"],
+                                matched_signals=serp_signals,
                             )
+                            if (
+                                evidence.get("capture_status") == "captcha_capture_invalid"
+                                or evidence.get("challenge_context_confirmed") is False
+                            ):
+                                # False/mismatched CAPTCHA evidence — do not wall the SERP run.
+                                pages_out.append(
+                                    {
+                                        "page": page_index,
+                                        "url": url,
+                                        "status": "failed",
+                                        "code": "captcha_evidence_invalid",
+                                        "items": [],
+                                        "meta": {"matched_signals": serp_signals},
+                                    }
+                                )
+                                _emit_page_progress(page_index)
+                                continue
                             wall_payload["challenge_url"] = evidence.get("challenge_url") or ""
                             wall_payload["challenge_title"] = evidence.get("challenge_title") or ""
                             wall_payload["screenshot"] = evidence.get("screenshot") or {
@@ -422,10 +453,17 @@ def _read_vacancy_pages(
                         if looks_like_hh_challenge(url=final_url, title=page_title):
                             evidence: dict[str, Any] = {}
                             try:
+                                from job_search_hh.vacancy_extractors import (
+                                    diagnose_challenge_signals,
+                                )
+
                                 evidence = _persist_captcha_before_close(
                                     page,
                                     vacancy_id=external_id,
                                     challenge_url_hint=final_url,
+                                    matched_signals=diagnose_challenge_signals(
+                                        url=final_url, title=page_title
+                                    ),
                                 )
                             except Exception:  # noqa: BLE001
                                 evidence = {
@@ -436,6 +474,19 @@ def _read_vacancy_pages(
                                         "screenshot_error": "persist_failed",
                                     },
                                 }
+                            if (
+                                evidence.get("capture_status") == "captcha_capture_invalid"
+                                or evidence.get("challenge_context_confirmed") is False
+                            ):
+                                details_out.append(
+                                    {
+                                        "external_id": external_id,
+                                        "status": "failed",
+                                        "code": "captcha_evidence_invalid",
+                                        "content": None,
+                                    }
+                                )
+                                continue
                             if on_page_progress is not None:
                                 try:
                                     on_page_progress(
@@ -537,12 +588,17 @@ def _read_vacancy_pages(
                                     else {}
                                 )
                                 hint = ""
+                                signals: list[str] = []
                                 if isinstance(meta, dict):
                                     hint = str(meta.get("challenge_url") or "")
+                                    raw_signals = meta.get("matched_signals") or []
+                                    if isinstance(raw_signals, list):
+                                        signals = [str(s) for s in raw_signals if s]
                                 evidence = _persist_captcha_before_close(
                                     page,
                                     vacancy_id=external_id,
                                     challenge_url_hint=hint or str(getattr(page, "url", "") or ""),
+                                    matched_signals=signals,
                                 )
                             except Exception:  # noqa: BLE001
                                 evidence = {
@@ -552,6 +608,20 @@ def _read_vacancy_pages(
                                         "screenshot_error": "persist_failed",
                                     },
                                 }
+                            # Mismatched / false evidence → do not wall run as recoverable CAPTCHA.
+                            if (
+                                evidence.get("capture_status") == "captcha_capture_invalid"
+                                or evidence.get("challenge_context_confirmed") is False
+                            ):
+                                details_out.append(
+                                    {
+                                        "external_id": external_id,
+                                        "status": "failed",
+                                        "code": "captcha_evidence_invalid",
+                                        "content": None,
+                                    }
+                                )
+                                continue
                         payload = {
                             "kind": kind,
                             "pages": pages_out,
@@ -718,6 +788,7 @@ def acquire_vacancies(
     serp_guard: Callable[..., dict[str, Any]] | None = None,
     on_page_progress: Callable[[dict[str, Any]], None] | None = None,
     detail_id_filter: Callable[[list[str]], list[str]] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Bounded list-first vacancy acquisition via browser RO transport."""
     resolved = paths or SessionPaths.from_env()
@@ -787,6 +858,8 @@ def acquire_vacancies(
             }
             if on_page_progress is not None:
                 reader_kwargs["on_page_progress"] = on_page_progress
+            if run_id:
+                reader_kwargs["run_id"] = run_id
             if detail_id_filter is not None:
                 reader_kwargs["detail_id_filter"] = detail_id_filter
             raw = reader(**reader_kwargs)

@@ -10,6 +10,8 @@ import pytest
 from job_search_hh.session import SessionPaths, confirm_login
 from job_search_hh.vacancy_browser import STATUS_ACTION_REQUIRED, acquire_vacancies
 from job_search_hh.vacancy_extractors import (
+    challenge_context_confirmed,
+    challenge_dom_hit,
     extract_detail_page,
     looks_like_hh_challenge,
 )
@@ -34,7 +36,7 @@ class _FakePage:
         self.evaluate_calls += 1
         # First evaluate is challenge DOM probe; subsequent is DETAIL_EXTRACT_JS.
         if self.evaluate_calls == 1 and "showcaptcha" in (_script or ""):
-            return False
+            return {"hit": False, "signals": []}
         return self._evaluate_payload
 
 
@@ -44,6 +46,11 @@ def test_looks_like_hh_challenge_url_and_title() -> None:
     assert looks_like_hh_challenge(url="https://hh.ru/vacancy/1", title="SmartCaptcha")
     assert not looks_like_hh_challenge(
         url="https://hh.ru/vacancy/123456", title="Python developer"
+    )
+    # Regression A: vacancy title containing "Robotics" must NOT match.
+    assert not looks_like_hh_challenge(
+        url="https://hh.ru/vacancy/137205192",
+        title="Technical Project Manager — Robotics",
     )
 
 
@@ -164,3 +171,155 @@ def test_mid_details_captcha_stops_further_processing(
     assert report["details"][0]["external_id"] == "1001"
     assert report["code"] != "browser_proxy_unavailable"
     assert report["code"] != "vacancy_detail_failed"
+
+
+# ---------------------------------------------------------------------------
+# Evidence consistency regressions (owner A–E)
+# ---------------------------------------------------------------------------
+
+
+def test_regression_a_robotics_title_not_challenge() -> None:
+    """A: «Technical Project Manager — Robotics» must not trip URL/title detector."""
+    url = "https://hh.ru/vacancy/137205192"
+    title = "Technical Project Manager — Robotics"
+    assert not looks_like_hh_challenge(url=url, title=title)
+    assert not challenge_context_confirmed(
+        url=url, title=title, matched_signals=["dom_title"]
+    )
+
+
+def test_regression_b_real_captcha_title_and_url_still_match() -> None:
+    """B: real CAPTCHA URL/title phrases still detect."""
+    assert looks_like_hh_challenge(url="https://hh.ru/showcaptcha?d=1", title="")
+    assert looks_like_hh_challenge(
+        url="https://hh.ru/account/captcha",
+        title="Подтвердите, что вы не робот",
+    )
+    assert challenge_context_confirmed(
+        url="https://hh.ru/showcaptcha?d=1",
+        title="Подтвердите, что вы не робот",
+        matched_signals=["url", "title"],
+    )
+
+
+def test_regression_c_vacancy_capture_is_invalid_not_recoverable(
+    tmp_path: Path,
+) -> None:
+    """C: vacancy page capture → captcha_capture_invalid, recovery unavailable."""
+    from job_search_hh.challenge_handoff import (
+        CAPTURE_INVALID,
+        capture_and_persist_live_challenge,
+        public_challenge_view,
+        read_challenge_state,
+    )
+
+    paths = _paths(tmp_path)
+
+    class _VacancyPage:
+        url = "https://hh.ru/vacancy/137205192"
+
+        def title(self) -> str:
+            return "Technical Project Manager — Robotics"
+
+        def screenshot(self, **_kwargs: Any) -> None:
+            target = _kwargs.get("path")
+            if target:
+                Path(target).write_bytes(b"\x89PNG_fake")
+
+        def evaluate(self, _script: str) -> Any:
+            # Simulate the pre-fix DOM false positive (bare robot → Robotics).
+            return {"hit": True, "signals": ["dom_title"]}
+
+    evidence = capture_and_persist_live_challenge(
+        _VacancyPage(),
+        run_id="run-robotics-fp",
+        vacancy_id="137205192",
+        paths=paths,
+        matched_signals=["dom_title"],
+    )
+    assert evidence["capture_status"] == CAPTURE_INVALID
+    assert evidence["challenge_context_confirmed"] is False
+    assert evidence["recovery_available"] is False
+    state = read_challenge_state(paths)
+    assert state is not None
+    assert state["capture_status"] == CAPTURE_INVALID
+    assert state["run_id"] == "run-robotics-fp"
+    assert state["vacancy_id"] == "137205192"
+    assert state["page_identity"]["url"].endswith("/vacancy/137205192")
+    # D-partial: Web/API must not expose as active recoverable CAPTCHA.
+    assert public_challenge_view(paths) is None
+
+
+def test_regression_d_public_view_hides_invalid(tmp_path: Path) -> None:
+    """D: inconsistent evidence → not normal active recoverable CAPTCHA."""
+    from job_search_hh.challenge_handoff import (
+        CAPTURE_INVALID,
+        public_challenge_view,
+        write_challenge_state,
+    )
+
+    paths = _paths(tmp_path)
+    write_challenge_state(
+        challenge_url="https://hh.ru/vacancy/137205192",
+        challenge_title="Technical Project Manager — Robotics",
+        run_id="r1",
+        vacancy_id="137205192",
+        screenshot={"screenshot_available": True, "screenshot_filename": "x.png"},
+        paths=paths,
+        matched_signals=["dom_title"],
+    )
+    state_path = paths.state_dir / "challenge_active.json"
+    assert state_path.is_file()
+    import json
+
+    disk = json.loads(state_path.read_text(encoding="utf-8"))
+    assert disk["capture_status"] == CAPTURE_INVALID
+    assert disk["recovery_available"] is False
+    assert public_challenge_view(paths) is None
+
+
+def test_regression_e_real_challenge_still_recoverable(tmp_path: Path) -> None:
+    """E: real challenge URL + title still creates recoverable captured state."""
+    from job_search_hh.challenge_handoff import (
+        CAPTURE_OK,
+        capture_and_persist_live_challenge,
+        public_challenge_view,
+    )
+
+    paths = _paths(tmp_path)
+
+    class _CaptchaPage:
+        url = "https://hh.ru/account/captcha?state=1"
+
+        def title(self) -> str:
+            return "Подтвердите, что вы не робот"
+
+        def screenshot(self, **_kwargs: Any) -> None:
+            target = _kwargs.get("path")
+            if target:
+                Path(target).write_bytes(b"\x89PNG_fake")
+
+        def evaluate(self, _script: str) -> Any:
+            return {"hit": True, "signals": ["dom_url", "dom_title", "dom_body_challenge"]}
+
+    evidence = capture_and_persist_live_challenge(
+        _CaptchaPage(),
+        run_id="run-real-captcha",
+        vacancy_id=None,
+        paths=paths,
+    )
+    assert evidence["capture_status"] == CAPTURE_OK
+    assert evidence["challenge_context_confirmed"] is True
+    assert evidence["recovery_available"] is True
+    view = public_challenge_view(paths)
+    assert view is not None
+    assert view["recovery_available"] is True
+    assert view["run_id"] == "run-real-captcha"
+    assert "captcha" in (view.get("challenge_url") or "")
+
+
+def test_challenge_dom_hit_normalizes_legacy_bool() -> None:
+    assert challenge_dom_hit(False) == (False, [])
+    assert challenge_dom_hit(True)[0] is True
+    hit, signals = challenge_dom_hit({"hit": True, "signals": ["dom_url"]})
+    assert hit and signals == ["dom_url"]

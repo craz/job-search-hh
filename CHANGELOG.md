@@ -21,6 +21,13 @@ Semantic Versioning.
 
 ### Fixed
 
+- CAPTCHA evidence consistency: DOM title detector no longer matches bare
+  ``robot``/``робот`` substrings (false positive on vacancy titles like
+  «Technical Project Manager — Robotics»). Capture binds run_id / vacancy_id /
+  page.url / title / matched_signals / screenshot from the same page object;
+  inconsistent evidence → ``captcha_capture_invalid`` (not recoverable active
+  CAPTCHA). CDP confirm probe no longer uses implicit ``pages[-1]``.
+
 - CAPTCHA live handoff: persist challenge URL/title/screenshot *before*
   Playwright ``context.close``; distinguish capture A/B/C; never fabricate
   ``https://hh.ru/captcha``; ``open-challenge`` returns

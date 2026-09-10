@@ -43,14 +43,18 @@ def looks_like_hh_challenge(*, url: str = "", title: str = "") -> bool:
     return False
 
 
+# DOM probe returns {hit, signals[]} — never bare substring "robot"/"робот"
+# (false-positive on vacancy titles like "… Robotics"). Align with _CHALLENGE_TITLE_RE.
 _CHALLENGE_DOM_JS = """() => {
+  const signals = [];
   const href = String(location.href || '');
   if (/showcaptcha|smartcaptcha|\\/captcha(?:[/?]|$)|challenge|checkcaptcha/i.test(href)) {
-    return true;
+    signals.push('dom_url');
   }
   const title = String(document.title || '');
-  if (/captcha|smartcaptcha|робот|robot|verify you are human|доступ ограничен/i.test(title)) {
-    return true;
+  // Phrase-level only — do NOT match bare "robot" inside "Robotics".
+  if (/captcha|smartcaptcha|подтвердите.*что\\s+вы\\s+не\\s+робот|are you (?:a )?robot|verify you are human|доступ ограничен|attention required/i.test(title)) {
+    signals.push('dom_title');
   }
   const qa = (sel) => document.querySelector(sel);
   if (qa(
@@ -59,14 +63,61 @@ _CHALLENGE_DOM_JS = """() => {
     '.SmartCaptcha, [class*="SmartCaptcha"], #checkbox-captcha, ' +
     '[class*="Captcha"], form[action*="captcha"]'
   )) {
-    return true;
+    signals.push('dom_captcha_node');
   }
   const bodyText = ((document.body && document.body.innerText) || '').slice(0, 4000);
-  if (/я\\s+не\\s+робот|are you a robot|smartcaptcha|подтвердите,?\\s*что\\s+вы\\s+человек/i.test(bodyText)) {
-    return true;
+  if (/я\\s+не\\s+робот|are you a robot|smartcaptcha|подтвердите,?\\s*что\\s+вы\\s+человек|подтвердите,?\\s*что\\s+вы\\s+не\\s+робот/i.test(bodyText)) {
+    signals.push('dom_body_challenge');
   }
-  return false;
+  return { hit: signals.length > 0, signals };
 }"""
+
+
+def challenge_dom_hit(result: Any) -> tuple[bool, list[str]]:
+    """Normalize Playwright evaluate result from _CHALLENGE_DOM_JS."""
+    if isinstance(result, dict):
+        signals_raw = result.get("signals") or []
+        signals = [str(s) for s in signals_raw if s]
+        hit = bool(result.get("hit")) or bool(signals)
+        return hit, signals
+    return bool(result), (["dom_legacy_true"] if result else [])
+
+
+def diagnose_challenge_signals(*, url: str = "", title: str = "") -> list[str]:
+    """Return which URL/title clauses indicate an HH challenge (no DOM)."""
+    signals: list[str] = []
+    if url and _CHALLENGE_URL_RE.search(url):
+        signals.append("url")
+    if title and _CHALLENGE_TITLE_RE.search(title):
+        signals.append("title")
+    return signals
+
+
+def challenge_context_confirmed(
+    *,
+    url: str = "",
+    title: str = "",
+    matched_signals: list[str] | None = None,
+) -> bool:
+    """True when captured page identity confirms a real CAPTCHA / challenge gate.
+
+    Vacancy pages (``/vacancy/<id>``) with non-challenge titles are never confirmed,
+    even if a stale/false DOM signal was recorded — prevents recoverable active
+    CAPTCHA from normal vacancy screenshots (e.g. title containing ``Robotics``).
+    """
+    signals = [str(s) for s in (matched_signals or []) if s]
+    url_s = (url or "").strip()
+    title_s = (title or "").strip()
+    path = urlparse(url_s).path.lower() if url_s else ""
+    vacancy_page = bool(re.search(r"/vacancy/\d+", path))
+    url_title_hit = looks_like_hh_challenge(url=url_s, title=title_s)
+    if vacancy_page and not url_title_hit:
+        # Normal vacancy identity — never treat as confirmed challenge context.
+        return False
+    if url_title_hit:
+        return True
+    strong = {"dom_url", "dom_captcha_node", "dom_body_challenge", "url", "title"}
+    return bool(strong.intersection(signals))
 
 
 SEARCH_EXTRACT_JS = """() => {
@@ -384,17 +435,27 @@ def extract_search_page(page: Any) -> dict[str, Any]:
         return {
             "kind": "captcha_or_action_required",
             "items": [],
-            "meta": {"challenge_url": final_url, "challenge_title": title},
+            "meta": {
+                "challenge_url": final_url,
+                "challenge_title": title,
+                "matched_signals": diagnose_challenge_signals(url=final_url, title=title),
+            },
         }
     path = urlparse(final_url).path.lower()
     if "/account/login" in path or path == "/login":
         return {"kind": "login_required", "items": [], "meta": {}}
     try:
-        if bool(page.evaluate(_CHALLENGE_DOM_JS)):
+        hit, dom_signals = challenge_dom_hit(page.evaluate(_CHALLENGE_DOM_JS))
+        if hit:
+            signals = diagnose_challenge_signals(url=final_url, title=title) + dom_signals
             return {
                 "kind": "captcha_or_action_required",
                 "items": [],
-                "meta": {"challenge_url": final_url, "challenge_title": title},
+                "meta": {
+                    "challenge_url": final_url,
+                    "challenge_title": title,
+                    "matched_signals": signals,
+                },
             }
     except Exception:  # noqa: BLE001
         pass
@@ -416,17 +477,27 @@ def extract_detail_page(page: Any) -> dict[str, Any]:
         return {
             "kind": "captcha_or_action_required",
             "content": {},
-            "meta": {"challenge_url": final_url, "challenge_title": title},
+            "meta": {
+                "challenge_url": final_url,
+                "challenge_title": title,
+                "matched_signals": diagnose_challenge_signals(url=final_url, title=title),
+            },
         }
     path = urlparse(final_url).path.lower()
     if "/account/login" in path or path == "/login":
         return {"kind": "login_required", "content": {}}
     try:
-        if bool(page.evaluate(_CHALLENGE_DOM_JS)):
+        hit, dom_signals = challenge_dom_hit(page.evaluate(_CHALLENGE_DOM_JS))
+        if hit:
+            signals = diagnose_challenge_signals(url=final_url, title=title) + dom_signals
             return {
                 "kind": "captcha_or_action_required",
                 "content": {},
-                "meta": {"challenge_url": final_url, "challenge_title": title},
+                "meta": {
+                    "challenge_url": final_url,
+                    "challenge_title": title,
+                    "matched_signals": signals,
+                },
             }
     except Exception:  # noqa: BLE001
         pass

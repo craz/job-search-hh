@@ -31,7 +31,13 @@ from job_search_hh.session import (
     novnc_public_url,
     require_interactive_login_runtime,
 )
-from job_search_hh.vacancy_extractors import looks_like_hh_challenge
+from job_search_hh.vacancy_extractors import (
+    _CHALLENGE_DOM_JS,
+    challenge_context_confirmed,
+    challenge_dom_hit,
+    diagnose_challenge_signals,
+    looks_like_hh_challenge,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,18 +101,40 @@ def clear_challenge_state(paths: SessionPaths | None = None) -> None:
 
 # Capture classes for operator recovery UX:
 # A — URL + screenshot; B — URL, screenshot failed; C — captcha seen, handoff capture failed.
+# D — evidence inconsistent with a real challenge (not recoverable active CAPTCHA).
 CAPTURE_OK = "captured"  # A
 CAPTURE_NO_SCREENSHOT = "captured_no_screenshot"  # B
 CAPTURE_FAILED = "capture_failed"  # C
+CAPTURE_INVALID = "captcha_capture_invalid"  # D
 ACTION_CHALLENGE_CAPTURE_FAILED = "challenge_capture_failed"
 # Bumped when capture/handoff contract changes; written into challenge_active.
-CAPTURE_IMPL_ID = "capture-v2-persist-before-close"
+CAPTURE_IMPL_ID = "capture-v3-evidence-consistency"
 
 
-def classify_capture(*, challenge_url: str, screenshot: dict[str, Any] | None) -> str:
-    """Return capture class A/B/C code for challenge_active state."""
+def classify_capture(
+    *,
+    challenge_url: str,
+    screenshot: dict[str, Any] | None,
+    challenge_title: str = "",
+    matched_signals: list[str] | None = None,
+    context_confirmed: bool | None = None,
+) -> str:
+    """Return capture class A/B/C/D code for challenge_active state."""
     url = (challenge_url or "").strip()
+    title = (challenge_title or "").strip()
+    signals = [str(s) for s in (matched_signals or []) if s]
     shot = screenshot or {}
+    confirmed = (
+        context_confirmed
+        if context_confirmed is not None
+        else challenge_context_confirmed(url=url, title=title, matched_signals=signals)
+    )
+    if not confirmed:
+        # Identity present but not a real challenge → invalid.
+        # No identity at all → capture_failed (class C).
+        if url or title or signals:
+            return CAPTURE_INVALID
+        return CAPTURE_FAILED
     if not url:
         return CAPTURE_FAILED
     if shot.get("screenshot_available"):
@@ -119,9 +147,15 @@ def recovery_available_from_state(state: dict[str, Any] | None, *, url_fallback:
 
     Legacy states (pre-capture-v2) omit ``recovery_available``; infer from URL so
     Web/API never strip a real challenge_url after a code upgrade.
+    Invalid / inconsistent evidence is never recoverable.
     """
     if not state:
         return bool((url_fallback or "").strip())
+    status = str(state.get("capture_status") or "")
+    if status == CAPTURE_INVALID:
+        return False
+    if state.get("challenge_context_confirmed") is False:
+        return False
     if "recovery_available" in state and state.get("recovery_available") is not None:
         return bool(state.get("recovery_available"))
     url = str(state.get("challenge_url") or url_fallback or "").strip()
@@ -160,18 +194,57 @@ def write_challenge_state(
     screenshot: dict[str, Any] | None = None,
     paths: SessionPaths | None = None,
     capture_status: str | None = None,
+    matched_signals: list[str] | None = None,
+    page_identity: dict[str, Any] | None = None,
+    challenge_context_confirmed_flag: bool | None = None,
 ) -> dict[str, Any]:
     resolved = paths or SessionPaths.from_env()
     shot = screenshot or {}
     url = (challenge_url or "").strip()
-    status = capture_status or classify_capture(challenge_url=url, screenshot=shot)
-    recovery_available = status in {CAPTURE_OK, CAPTURE_NO_SCREENSHOT} and bool(url)
+    title = challenge_title or ""
+    signals = [str(s) for s in (matched_signals or []) if s]
+    confirmed = (
+        challenge_context_confirmed_flag
+        if challenge_context_confirmed_flag is not None
+        else challenge_context_confirmed(url=url, title=title, matched_signals=signals)
+    )
+    status = capture_status or classify_capture(
+        challenge_url=url,
+        screenshot=shot,
+        challenge_title=title,
+        matched_signals=signals,
+        context_confirmed=confirmed,
+    )
+    recovery_available = status in {CAPTURE_OK, CAPTURE_NO_SCREENSHOT} and bool(url) and confirmed
+    if status == CAPTURE_INVALID:
+        state_status = "captcha_evidence_invalid"
+        state_code = CAPTURE_INVALID
+        note = (
+            "Captured page identity does not confirm an HH CAPTCHA challenge. "
+            "Evidence preserved for forensics; recovery is unavailable. "
+            "Not an active recoverable CAPTCHA."
+        )
+    elif recovery_available:
+        state_status = "operator_action_required"
+        state_code = "browser_captcha_or_action_required"
+        note = (
+            "Challenge was captured in headless scraper context. "
+            "Manual recovery opens headed Chromium at the challenge URL on the "
+            "same persistent profile — not a fresh login page."
+        )
+    else:
+        state_status = "operator_action_required"
+        state_code = "browser_captcha_or_action_required"
+        note = (
+            "CAPTCHA was detected but challenge URL/screenshot could not be "
+            "persisted for noVNC recovery. Retry acquisition after checking HH."
+        )
     state = {
-        "status": "operator_action_required",
-        "code": "browser_captcha_or_action_required",
+        "status": state_status,
+        "code": state_code,
         "detected_at": _utc_now(),
         "challenge_url": url or None,
-        "challenge_title": challenge_title,
+        "challenge_title": title,
         "run_id": run_id,
         "vacancy_id": vacancy_id,
         "progress": progress or {},
@@ -182,19 +255,13 @@ def write_challenge_state(
         "capture_status": status,
         "recovery_available": recovery_available,
         "capture_impl": CAPTURE_IMPL_ID,
+        "matched_signals": signals,
+        "page_identity": page_identity or {"url": url or None, "title": title},
+        "challenge_context_confirmed": confirmed,
         "challenge_session_available": False,
         "handoff_pid": None,
         "novnc_url": (novnc_public_url() if recovery_available and novnc_configured() else None),
-        "note": (
-            "Challenge was captured in headless scraper context. "
-            "Manual recovery opens headed Chromium at the challenge URL on the "
-            "same persistent profile — not a fresh login page."
-            if recovery_available
-            else (
-                "CAPTCHA was detected but challenge URL/screenshot could not be "
-                "persisted for noVNC recovery. Retry acquisition after checking HH."
-            )
-        ),
+        "note": note,
     }
     challenge_state_path(resolved).write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
@@ -211,27 +278,57 @@ def capture_and_persist_live_challenge(
     vacancy_id: str | None = None,
     progress: dict[str, Any] | None = None,
     paths: SessionPaths | None = None,
+    matched_signals: list[str] | None = None,
 ) -> dict[str, Any]:
     """Atomically capture URL/title/screenshot and persist state while page is live.
 
     Must run before Playwright ``context.close`` and before terminal status raise.
-    Never fabricates a challenge URL.
+    Binds run_id, vacancy_id, page.url, title, matched signals, screenshot and
+    detected_at from the **same** page object before writing challenge_active.
+    If capture does not confirm challenge context → ``captcha_capture_invalid``
+    with ``recovery_available=false`` (not a recoverable active CAPTCHA).
+    Never fabricates a challenge URL. Never uses an implicit pages[-1].
     """
     resolved = paths or SessionPaths.from_env()
-    url = (challenge_url_hint or "").strip()
-    if not url:
-        try:
-            url = str(getattr(page, "url", "") or "").strip()
-        except Exception:  # noqa: BLE001
-            url = ""
+    # Bind identity from the exact page the detector fired on — no pages[-1].
+    try:
+        live_url = str(getattr(page, "url", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        live_url = ""
+    url = (challenge_url_hint or "").strip() or live_url
     title = ""
+    title_error = None
     try:
         title = str(page.title() or "")
     except Exception as error:  # noqa: BLE001
         title = ""
         title_error = type(error).__name__
-    else:
-        title_error = None
+
+    signals = [str(s) for s in (matched_signals or []) if s]
+    if not signals:
+        signals = diagnose_challenge_signals(url=url, title=title)
+        try:
+            hit, dom_signals = challenge_dom_hit(page.evaluate(_CHALLENGE_DOM_JS))
+            if hit:
+                signals = list(dict.fromkeys([*signals, *dom_signals]))
+        except Exception:  # noqa: BLE001 - signals are best-effort
+            pass
+
+    page_identity = {
+        "url": live_url or url or None,
+        "title": title,
+        "hint_url": (challenge_url_hint or "").strip() or None,
+        "page_obj_id": hex(id(page)),
+    }
+    logger.info(
+        "hh_captcha_page_identity url=%s title=%s signals=%s vacancy_id=%s run_id=%s page_id=%s",
+        page_identity.get("url"),
+        (title or "")[:120],
+        signals,
+        vacancy_id,
+        run_id,
+        page_identity.get("page_obj_id"),
+    )
 
     screenshot: dict[str, Any]
     try:
@@ -243,6 +340,23 @@ def capture_and_persist_live_challenge(
             "screenshot_error_detail": str(error)[:240],
         }
 
+    # Re-bind URL/title after screenshot from the same page object (race guard).
+    try:
+        post_url = str(getattr(page, "url", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        post_url = live_url
+    try:
+        post_title = str(page.title() or "")
+    except Exception:  # noqa: BLE001
+        post_title = title
+    if post_url:
+        url = post_url
+        page_identity["url"] = post_url
+    if post_title:
+        title = post_title
+        page_identity["title"] = post_title
+
+    confirmed = challenge_context_confirmed(url=url, title=title, matched_signals=signals)
     state = write_challenge_state(
         challenge_url=url,
         challenge_title=title,
@@ -251,6 +365,9 @@ def capture_and_persist_live_challenge(
         progress=progress,
         screenshot=screenshot,
         paths=resolved,
+        matched_signals=signals,
+        page_identity=page_identity,
+        challenge_context_confirmed_flag=confirmed,
     )
     if title_error and not state.get("screenshot_error"):
         state["title_error"] = title_error
@@ -259,15 +376,17 @@ def capture_and_persist_live_challenge(
             encoding="utf-8",
         )
     logger.info(
-        "hh_captcha_capture impl=%s status=%s url_present=%s screenshot=%s "
-        "vacancy_id=%s run_id=%s shot_error=%s",
+        "hh_captcha_capture impl=%s status=%s confirmed=%s url_present=%s screenshot=%s "
+        "vacancy_id=%s run_id=%s shot_error=%s signals=%s",
         CAPTURE_IMPL_ID,
         state.get("capture_status"),
+        confirmed,
         bool(url),
         bool(state.get("screenshot_available")),
         vacancy_id,
         run_id,
         screenshot.get("screenshot_error"),
+        signals,
     )
     return {
         "challenge_url": url,
@@ -277,6 +396,9 @@ def capture_and_persist_live_challenge(
         "recovery_available": bool(state.get("recovery_available")),
         "capture_status": state.get("capture_status"),
         "capture_impl": CAPTURE_IMPL_ID,
+        "challenge_context_confirmed": confirmed,
+        "matched_signals": signals,
+        "page_identity": page_identity,
     }
 
 
@@ -721,20 +843,52 @@ def _inspect_live_challenge_browser(
                     pages.extend(ctx.pages)
                 if not pages:
                     return {"state": "unknown", "url": "", "title": "", "reason": "no_pages"}
-                page = pages[-1]
-                final_url = str(page.url or "")
-                try:
-                    title = str(page.title() or "")
-                except Exception:  # noqa: BLE001
-                    title = ""
-                challenged = looks_like_hh_challenge(url=final_url, title=title)
-                if not challenged:
+                # Prefer a page that still looks like the challenge — never implicit pages[-1].
+                page = None
+                final_url = ""
+                title = ""
+                challenged = False
+                for candidate in pages:
                     try:
-                        from job_search_hh.vacancy_extractors import _CHALLENGE_DOM_JS
-
-                        challenged = bool(page.evaluate(_CHALLENGE_DOM_JS))
+                        cand_url = str(candidate.url or "")
                     except Exception:  # noqa: BLE001
-                        challenged = False
+                        cand_url = ""
+                    try:
+                        cand_title = str(candidate.title() or "")
+                    except Exception:  # noqa: BLE001
+                        cand_title = ""
+                    cand_hit = looks_like_hh_challenge(url=cand_url, title=cand_title)
+                    dom_hit = False
+                    if not cand_hit:
+                        try:
+                            dom_hit, _sigs = challenge_dom_hit(candidate.evaluate(_CHALLENGE_DOM_JS))
+                        except Exception:  # noqa: BLE001
+                            dom_hit = False
+                    if cand_hit or dom_hit:
+                        page = candidate
+                        final_url = cand_url
+                        title = cand_title
+                        challenged = True
+                        break
+                if page is None:
+                    # No challenged page found — report first page identity explicitly.
+                    page = pages[0]
+                    try:
+                        final_url = str(page.url or "")
+                    except Exception:  # noqa: BLE001
+                        final_url = ""
+                    try:
+                        title = str(page.title() or "")
+                    except Exception:  # noqa: BLE001
+                        title = ""
+                    challenged = False
+                logger.info(
+                    "hh_captcha_cdp_page_identity url=%s title=%s challenged=%s pages=%s",
+                    final_url,
+                    (title or "")[:120],
+                    challenged,
+                    len(pages),
+                )
                 return {
                     "state": "active" if challenged else "solved",
                     "url": final_url,
@@ -967,9 +1121,17 @@ def begin_challenge_handoff(
 
 
 def public_challenge_view(paths: SessionPaths | None = None) -> dict[str, Any] | None:
-    """Safe challenge payload for Web (no absolute host paths)."""
+    """Safe challenge payload for Web (no absolute host paths).
+
+    Inconsistent / invalid captures are **not** exposed as active recoverable
+    CAPTCHA (``active`` stays false via API). Evidence remains on disk.
+    """
     state = read_challenge_state(paths)
     if not state:
+        return None
+    status = str(state.get("capture_status") or "")
+    if status == CAPTURE_INVALID or state.get("challenge_context_confirmed") is False:
+        # Preserve historical evidence on disk; do not present as live CAPTCHA.
         return None
     url = str(state.get("challenge_url") or "").strip() or None
     recovery = recovery_available_from_state(state, url_fallback=url or "")
@@ -988,9 +1150,14 @@ def public_challenge_view(paths: SessionPaths | None = None) -> dict[str, Any] |
         or classify_capture(
             challenge_url=url or "",
             screenshot={"screenshot_available": state.get("screenshot_available")},
+            challenge_title=str(state.get("challenge_title") or ""),
+            matched_signals=list(state.get("matched_signals") or []),
+            context_confirmed=state.get("challenge_context_confirmed"),
         ),
         "recovery_available": recovery,
         "capture_impl": state.get("capture_impl"),
+        "matched_signals": list(state.get("matched_signals") or []),
+        "challenge_context_confirmed": state.get("challenge_context_confirmed"),
         "challenge_session_available": bool(state.get("challenge_session_available")),
         "interactive_ready": bool(state.get("interactive_ready")),
         "challenge_browser_state": state.get("challenge_browser_state"),

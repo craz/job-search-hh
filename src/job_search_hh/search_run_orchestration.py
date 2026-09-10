@@ -771,6 +771,7 @@ def run_resume_suitable_search(
             serp_guard=serp_guard,
             on_page_progress=_report_progress,
             detail_id_filter=detail_id_filter,
+            run_id=run_id,
         )
     except Exception as error:  # noqa: BLE001
         try:
