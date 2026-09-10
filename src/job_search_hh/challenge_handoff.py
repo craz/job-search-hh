@@ -464,7 +464,12 @@ def open_challenge_browser(
 
 
 def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, Any]:
-    """Re-check challenge URL; clear state only when challenge is gone."""
+    """Re-check challenge URL; clear state only when challenge is gone.
+
+    If the headed challenge Chromium still holds the profile, refuse with an
+    explicit operator message (do not probe and do not clear). Stale locks /
+    Singleton leftovers are healed only when no Chromium still uses the profile.
+    """
     resolved = paths or SessionPaths.from_env()
     state = read_challenge_state(resolved)
     if not state:
@@ -473,30 +478,56 @@ def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, An
             "cleared": True,
             "code": "no_active_challenge",
             "challenge": None,
+            "message": "Активного CAPTCHA challenge нет.",
         }
     url = str(state.get("challenge_url") or "").strip()
     if not url:
         clear_challenge_state(resolved)
-        return {"ok": True, "cleared": True, "code": "ready", "challenge": None}
+        return {
+            "ok": True,
+            "cleared": True,
+            "code": "ready",
+            "challenge": None,
+            "message": "CAPTCHA подтверждена, HeadHunter доступен",
+        }
 
-    from job_search_hh.session import ProfileLock, chromium_installed
+    from job_search_hh.browser import _clear_stale_chromium_singleton
+    from job_search_hh.session import ProfileLock, _profile_chrome_running, chromium_installed
 
     if not chromium_installed():
         return {
             "ok": False,
             "cleared": False,
             "code": "chromium_missing",
-            "challenge": state,
+            "challenge": public_challenge_view(resolved) or state,
+            "message": "Chromium не установлен — проверку challenge выполнить нельзя.",
         }
+
     lock = ProfileLock(resolved.profile_dir)
-    if lock.status() == "locked":
+    # Heal leftover product lock only when no Chromium still holds the profile.
+    lock.release_orphaned()
+    chrome_live = _profile_chrome_running(resolved.profile_dir)
+    handoff_live = _challenge_handoff_process_alive(state, resolved)
+    if chrome_live or handoff_live or lock.status() == "locked":
+        # Keep state; owner must close the headed window in noVNC.
         return {
             "ok": False,
             "cleared": False,
-            "code": "profile_locked",
-            "challenge": state,
-            "message": "Закройте браузер challenge в noVNC, затем нажмите «Проверить снова».",
+            "code": "challenge_browser_open",
+            "challenge": public_challenge_view(resolved) or state,
+            "message": (
+                "Окно CAPTCHA ещё открыто. "
+                "Закройте браузер HeadHunter в noVNC и повторите проверку."
+            ),
+            "challenge_browser_open": True,
+            "profile_lock": lock.status(),
+            "chrome_running": chrome_live,
         }
+
+    # Chromium closed: drop stale Singleton* so headless probe can open the profile.
+    _clear_stale_chromium_singleton(resolved.profile_dir)
+    with contextlib.suppress(OSError):
+        (resolved.state_dir / "challenge-browser.pid").unlink()
 
     try:
         from playwright.sync_api import sync_playwright
@@ -506,6 +537,7 @@ def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, An
     still_challenged = False
     final_url = url
     title = ""
+    probe_targets = _confirm_probe_urls(challenge_url=url)
     lock.acquire("challenge-confirm-probe")
     try:
         with sync_playwright() as playwright:
@@ -516,21 +548,29 @@ def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, An
             )
             try:
                 page = context.pages[0] if context.pages else context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-                page.wait_for_timeout(1_500)
-                final_url = str(page.url or "")
-                try:
-                    title = str(page.title() or "")
-                except Exception:  # noqa: BLE001
-                    title = ""
-                still_challenged = looks_like_hh_challenge(url=final_url, title=title)
-                if not still_challenged:
+                # Prefer backurl / resumes — captured captcha URLs are often one-shot.
+                for target in probe_targets:
+                    page.goto(target, wait_until="domcontentloaded", timeout=45_000)
+                    page.wait_for_timeout(1_500)
+                    final_url = str(page.url or "")
                     try:
-                        from job_search_hh.vacancy_extractors import _CHALLENGE_DOM_JS
-
-                        still_challenged = bool(page.evaluate(_CHALLENGE_DOM_JS))
+                        title = str(page.title() or "")
                     except Exception:  # noqa: BLE001
-                        pass
+                        title = ""
+                    challenged = looks_like_hh_challenge(url=final_url, title=title)
+                    if not challenged:
+                        try:
+                            from job_search_hh.vacancy_extractors import _CHALLENGE_DOM_JS
+
+                            challenged = bool(page.evaluate(_CHALLENGE_DOM_JS))
+                        except Exception:  # noqa: BLE001
+                            challenged = False
+                    if challenged:
+                        still_challenged = True
+                        break
+                    # Non-challenge page loaded — session is past the gate.
+                    still_challenged = False
+                    break
             finally:
                 context.close()
     finally:
@@ -540,6 +580,8 @@ def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, An
         state["last_probe_at"] = _utc_now()
         state["last_probe_url"] = final_url
         state["last_probe_title"] = title
+        state["challenge_session_available"] = False
+        state["handoff_pid"] = None
         challenge_state_path(resolved).write_text(
             json.dumps(state, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -548,19 +590,93 @@ def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, An
             "ok": False,
             "cleared": False,
             "code": "browser_captcha_or_action_required",
-            "challenge": state,
-            "message": "CAPTCHA всё ещё активна.",
+            "challenge": public_challenge_view(resolved) or state,
+            "message": "HeadHunter всё ещё требует подтверждение CAPTCHA",
+            "probed_url": final_url,
+            "probed_title": title,
         }
 
     clear_challenge_state(resolved)
+    # Promote session / connection when the challenge gate is gone.
+    confirm_report: dict[str, Any] = {}
+    try:
+        from job_search_hh.session import confirm_login
+
+        confirm_report = confirm_login(resolved, confirmed=True)
+    except SessionError as error:
+        confirm_report = {"ok": False, "code": str(error)}
+    except Exception as error:  # noqa: BLE001
+        confirm_report = {"ok": False, "code": type(error).__name__}
+
+    from job_search_hh.connection import connection_status
+
+    connection = connection_status()
+    login_ready = bool(connection.get("login_ready") or confirm_report.get("login_ready"))
     return {
         "ok": True,
         "cleared": True,
         "code": "ready",
         "challenge": None,
         "probed_url": final_url,
-        "message": "Challenge снят. Можно снова запустить проверку подходящих.",
+        "message": "CAPTCHA подтверждена, HeadHunter доступен",
+        "login_ready": login_ready,
+        "confirm_login": {
+            "code": confirm_report.get("code") or confirm_report.get("status"),
+            "login_ready": confirm_report.get("login_ready"),
+            "status": confirm_report.get("status"),
+        },
+        "connection": connection,
     }
+
+
+def _challenge_handoff_process_alive(
+    state: dict[str, Any] | None,
+    paths: SessionPaths,
+) -> bool:
+    """True when the headed challenge open-login child is still running."""
+    candidates: list[int] = []
+    if state and state.get("handoff_pid"):
+        with contextlib.suppress(TypeError, ValueError):
+            candidates.append(int(state["handoff_pid"]))
+    pid_path = paths.state_dir / "challenge-browser.pid"
+    if pid_path.is_file():
+        with contextlib.suppress(OSError, ValueError):
+            candidates.append(int(pid_path.read_text(encoding="utf-8").strip()))
+    for pid in candidates:
+        if pid <= 0:
+            continue
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def _confirm_probe_urls(*, challenge_url: str) -> list[str]:
+    """URLs to verify CAPTCHA is gone without relying on a one-shot captcha link."""
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    urls: list[str] = []
+    parsed = urlparse(challenge_url)
+    back = (parse_qs(parsed.query).get("backurl") or [None])[0]
+    if back:
+        decoded = unquote(str(back)).strip()
+        if decoded.startswith("http"):
+            urls.append(decoded)
+    urls.append("https://hh.ru/applicant/resumes")
+    # Keep original last — only if earlier probes are unavailable.
+    if challenge_url not in urls:
+        urls.append(challenge_url)
+    # De-dupe preserving order.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in urls:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
 
 
 def begin_challenge_handoff(

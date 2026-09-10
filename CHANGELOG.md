@@ -14,6 +14,9 @@ Semantic Versioning.
 - CAPTCHA handoff lifecycle: HH API does not auto-reload bind-mounted source —
   recreate HH after capture-contract commits; ``public_challenge_view`` infers
   ``recovery_available`` from legacy states that only have ``challenge_url``.
+- Post-CAPTCHA «Проверить снова»: detect live challenge Chromium / profile lock
+  with an explicit «окно ещё открыто» message; heal stale locks after close;
+  clear challenge only after probe; promote connection via confirm_login.
 - CAPTCHA operator handoff: capture screenshot from the challenged headless
   scraper context, persist private challenge state, open headed Chromium at the
   *challenge URL* (not `/account/login`), optional Telegram DM notify only when

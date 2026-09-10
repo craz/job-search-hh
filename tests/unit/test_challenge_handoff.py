@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -520,6 +524,113 @@ def test_capture_ordering_persist_before_simulated_close(tmp_path: Path) -> None
     assert evidence["challenge_url"]
     assert events == ["screenshot", "state_written", "context_close"]
     assert read_challenge_state(paths) is not None
+
+
+def test_confirm_refuses_while_challenge_browser_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    write_challenge_state(
+        challenge_url="https://hh.ru/account/captcha?state=1",
+        paths=paths,
+        screenshot={"screenshot_available": True, "screenshot_filename": "a.png"},
+    )
+    state = read_challenge_state(paths) or {}
+    state["handoff_pid"] = os.getpid()  # current test process is "alive"
+    challenge_state_path = paths.state_dir / "challenge_active.json"
+    challenge_state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setattr(
+        "job_search_hh.session._profile_chrome_running", lambda _p: True
+    )
+    result = confirm_challenge_cleared(paths)
+    assert result["ok"] is False
+    assert result["cleared"] is False
+    assert result["code"] == "challenge_browser_open"
+    assert "ещё открыто" in (result.get("message") or "")
+    assert read_challenge_state(paths) is not None
+
+
+def test_confirm_clears_when_browser_closed_and_challenge_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    write_challenge_state(
+        challenge_url="https://hh.ru/vacancy/1",
+        paths=paths,
+        screenshot={"screenshot_available": True, "screenshot_filename": "a.png"},
+    )
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    monkeypatch.setattr(
+        "job_search_hh.session._profile_chrome_running", lambda _p: False
+    )
+    monkeypatch.setattr(
+        "job_search_hh.browser._clear_stale_chromium_singleton", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff.looks_like_hh_challenge",
+        lambda **_k: False,
+    )
+
+    class _Page:
+        url = "https://hh.ru/vacancy/1"
+
+        def goto(self, *_a, **_k):
+            return None
+
+        def wait_for_timeout(self, *_a, **_k):
+            return None
+
+        def title(self):
+            return "Vacancy"
+
+        def evaluate(self, *_a, **_k):
+            return False
+
+    class _Ctx:
+        pages: list[Any] = []
+
+        def new_page(self):
+            return _Page()
+
+        def close(self):
+            return None
+
+    class _Browser:
+        def launch_persistent_context(self, **_k):
+            return _Ctx()
+
+    class _Pw:
+        chromium = _Browser()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    fake_sync = types.ModuleType("playwright.sync_api")
+    fake_sync.sync_playwright = lambda: _Pw()  # type: ignore[attr-defined]
+    fake_root = types.ModuleType("playwright")
+    monkeypatch.setitem(sys.modules, "playwright", fake_root)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync)
+    monkeypatch.setattr(
+        "job_search_hh.session.confirm_login",
+        lambda *_a, **_k: {"status": "connected", "login_ready": True, "code": "ready"},
+    )
+    monkeypatch.setattr(
+        "job_search_hh.connection.connection_status",
+        lambda: {"status": "connected", "login_ready": True, "code": "ready"},
+    )
+    result = confirm_challenge_cleared(paths)
+    assert result["ok"] is True
+    assert result["cleared"] is True
+    assert result["code"] == "ready"
+    assert "доступен" in (result.get("message") or "")
+    assert read_challenge_state(paths) is None
 
 
 def test_open_challenge_rejects_missing_url(tmp_path: Path) -> None:
