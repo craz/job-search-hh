@@ -477,6 +477,8 @@ def run_vacancy_search(
             "code": error_code or ("ready" if terminal == "success" else terminal),
             "action": acquisition.get("action") or {"code": "none"},
             "recovery": acquisition.get("recovery"),
+            "challenge": acquisition.get("challenge"),
+            "screenshot_available": acquisition.get("screenshot_available"),
         }
     )
 
@@ -796,6 +798,8 @@ def run_resume_suitable_search(
         "pagination": acquisition.get("pagination"),
         "recovery": acquisition.get("recovery"),
         "serp_guard": acquisition.get("serp_guard"),
+        "challenge": acquisition.get("challenge"),
+        "screenshot_available": acquisition.get("screenshot_available"),
     }
     source_total: int | None = None
     raw_pagination = acquisition.get("pagination")
@@ -837,6 +841,8 @@ def run_resume_suitable_search(
                 "code": acquire_code or "search_page_failed",
                 "action": acquisition.get("action") or {"code": "none"},
                 "recovery": acquisition.get("recovery"),
+                "challenge": acquisition.get("challenge"),
+                "screenshot_available": acquisition.get("screenshot_available"),
             }
         )
 
@@ -912,5 +918,7 @@ def run_resume_suitable_search(
             "code": error_code or ("ready" if terminal == "success" else terminal),
             "action": acquisition.get("action") or {"code": "none"},
             "recovery": acquisition.get("recovery"),
+            "challenge": acquisition.get("challenge"),
+            "screenshot_available": acquisition.get("screenshot_available"),
         }
     )

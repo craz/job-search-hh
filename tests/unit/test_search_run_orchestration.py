@@ -510,10 +510,15 @@ def test_mid_run_captcha_persists_distinct_error_not_detail_failed() -> None:
                 }
             ],
             "pagination": {"pages_fetched": 1, "page_from": 0, "page_to": 0},
-            "action": {"code": "confirm_login", "novnc_url": "http://127.0.0.1:6080/vnc.html"},
+            "action": {"code": "open_challenge", "novnc_url": "http://127.0.0.1:6080/vnc.html"},
             "recovery": {"kind": "captcha_or_action_required"},
             "challenge_url": "https://hh.ru/showcaptcha",
             "wall_detail_id": "1002",
+            "challenge": {
+                "screenshot_available": True,
+                "challenge_session_available": False,
+                "challenge_url": "https://hh.ru/showcaptcha",
+            },
         }
 
     report = run_vacancy_search(
@@ -523,9 +528,9 @@ def test_mid_run_captcha_persists_distinct_error_not_detail_failed() -> None:
     )
     assert report["status"] == STATUS_ACTION_REQUIRED
     assert report["code"] == "browser_captcha_or_action_required"
+    assert report["action"]["code"] == "open_challenge"
     assert report["search_run"]["status"] == "partial"
     assert report["search_run"]["error_code"] == "browser_captcha_or_action_required"
-    assert report["action"]["code"] == "confirm_login"
     assert report["code"] != "vacancy_detail_failed"
     assert report["code"] != "browser_proxy_unavailable"
 

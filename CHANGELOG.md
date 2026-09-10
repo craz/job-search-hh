@@ -7,9 +7,14 @@ Semantic Versioning.
 
 ### Fixed
 
+- CAPTCHA operator handoff: capture screenshot from the challenged headless
+  scraper context, persist private challenge state, open headed Chromium at the
+  *challenge URL* (not `/account/login`), optional Telegram DM notify only when
+  `HH_CAPTCHA_TG` + `TELEGRAM_DM_*` are set. Do not advertise login noVNC as the
+  CAPTCHA recovery path.
 - Suitable/detail acquisition fail-fast on HH CAPTCHA/challenge pages (URL/title/DOM),
   stops further vacancy detail loading, persists `browser_captcha_or_action_required`,
-  and surfaces `confirm_login` recovery — no CAPTCHA bypass.
+  and surfaces `open_challenge` recovery — no CAPTCHA bypass.
 - Resume-suitable acquisition paginates with `execution.max_pages` + `execution.start_page`
   (continuation), exposes HH-style `found` / `pages` / `next_page` / `more_remaining`, and
   scales detail ingest to the page cap so Web is not stuck on silent first-page-only runs.

@@ -82,6 +82,13 @@ def test_mid_details_captcha_stops_further_processing(
     monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
     paths = _paths(tmp_path)
     confirm_login(paths, confirmed=True)
+    monkeypatch.setattr(
+        "job_search_hh.vacancy_browser._finalize_captcha_handoff",
+        lambda raw, report, resolved: {
+            "action": {"code": "open_challenge", "novnc_url": "http://127.0.0.1:6080/vnc.html"},
+            "challenge": {"screenshot_available": True},
+        },
+    )
     progress_phases: list[str] = []
 
     def reader(**_kwargs: Any) -> dict[str, Any]:
@@ -148,7 +155,7 @@ def test_mid_details_captcha_stops_further_processing(
     )
     assert report["status"] == STATUS_ACTION_REQUIRED
     assert report["code"] == "browser_captcha_or_action_required"
-    assert report["action"]["code"] == "confirm_login"
+    assert report["action"]["code"] == "open_challenge"
     assert report["challenge_url"] == "https://hh.ru/showcaptcha?d=1"
     assert report["wall_detail_id"] == "1002"
     assert report["recovery"]["kind"] == "captcha_or_action_required"

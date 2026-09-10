@@ -10,6 +10,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 from job_search_hh.active_resume import set_active_resume
+from job_search_hh.challenge_handoff import (
+    confirm_challenge_cleared,
+    open_challenge_browser,
+    public_challenge_view,
+    read_challenge_screenshot_bytes,
+)
 from job_search_hh.connection import connection_status
 from job_search_hh.core_linkage import sync_active_resume_link
 from job_search_hh.egress import egress_diagnostic, egress_preflight_code
@@ -76,7 +82,36 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._json(status, with_recovery(payload))
             return
         if parsed.path == "/api/v1/connection":
-            self._json(HTTPStatus.OK, connection_status())
+            payload = connection_status()
+            challenge = public_challenge_view()
+            if challenge:
+                payload = dict(payload)
+                payload["challenge"] = challenge
+            self._json(HTTPStatus.OK, payload)
+            return
+        if parsed.path == "/api/v1/challenge":
+            challenge = public_challenge_view()
+            if not challenge:
+                self._json(HTTPStatus.OK, {"active": False, "challenge": None})
+                return
+            self._json(HTTPStatus.OK, {"active": True, "challenge": challenge})
+            return
+        if parsed.path == "/api/v1/challenge/screenshot":
+            shot = read_challenge_screenshot_bytes()
+            if shot is None:
+                self._json(
+                    HTTPStatus.NOT_FOUND,
+                    {"code": "screenshot_unavailable", "message": "No challenge screenshot"},
+                )
+                return
+            content, filename = shot
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(content)
             return
         if parsed.path == "/api/v1/account":
             self._json(HTTPStatus.OK, account_profile())
@@ -186,6 +221,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                 report = open_login(detach=True)
                 report["connection"] = connection_status()
                 self._json(HTTPStatus.OK, report)
+                return
+            if parsed.path == "/api/v1/connection/open-challenge":
+                body_url = body.get("challenge_url")
+                url = body_url if isinstance(body_url, str) else None
+                report = open_challenge_browser(challenge_url=url, detach=True)
+                report["connection"] = connection_status()
+                self._json(HTTPStatus.OK, report)
+                return
+            if parsed.path == "/api/v1/connection/confirm-challenge":
+                report = confirm_challenge_cleared()
+                report["connection"] = connection_status()
+                status = HTTPStatus.OK if report.get("ok") else HTTPStatus.CONFLICT
+                self._json(status, report)
                 return
             if parsed.path == "/api/v1/connection/confirm":
                 if not bool(body.get("confirmed")):

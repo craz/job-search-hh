@@ -186,6 +186,13 @@ def test_captcha_is_action_required_not_empty(
     monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
     paths = _paths(tmp_path)
     confirm_login(paths, confirmed=True)
+    monkeypatch.setattr(
+        "job_search_hh.vacancy_browser._finalize_captcha_handoff",
+        lambda raw, report, resolved: {
+            "action": {"code": "open_challenge", "novnc_url": "http://127.0.0.1:6080/vnc.html"},
+            "challenge": {"screenshot_available": False},
+        },
+    )
 
     def captcha(**_kwargs: Any) -> dict[str, Any]:
         return {"kind": "captcha_or_action_required", "pages": [], "details": []}
@@ -194,6 +201,7 @@ def test_captcha_is_action_required_not_empty(
     assert report["status"] == STATUS_ACTION_REQUIRED
     assert report["summaries"] == []
     assert report["recovery"]["kind"] == "captcha_or_action_required"
+    assert report["action"]["code"] == "open_challenge"
 
 
 def test_permission_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
