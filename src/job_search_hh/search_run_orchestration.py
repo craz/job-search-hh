@@ -699,6 +699,26 @@ def run_resume_suitable_search(
         page_size=None,
     )
 
+    def _report_progress(payload: dict[str, Any]) -> None:
+        if not run_id:
+            return
+        try:
+            updated = client.update_search_run_progress(run_id, payload)
+            base["search_run"] = updated
+        except CoreError:
+            pass
+
+    _report_progress(
+        {
+            "pages_fetched": 0,
+            "pages_planned": int(str(execution["max_pages"])),
+            "page_from": int(str(execution["start_page"])),
+            "page_current": int(str(execution["start_page"])),
+            "checked_count": 0,
+            "phase": "started",
+        }
+    )
+
     def page_url_builder(page: int) -> str:
         return map_resume_suitable_query(resume_id, page=page, order=str(execution["order"])).url
 
@@ -721,6 +741,7 @@ def run_resume_suitable_search(
             timeout_seconds=timeout_seconds,
             page_url_builder=page_url_builder,
             serp_guard=serp_guard,
+            on_page_progress=_report_progress,
         )
     except Exception as error:  # noqa: BLE001
         try:
@@ -797,6 +818,17 @@ def run_resume_suitable_search(
     summaries = [s for s in list(acquisition.get("summaries") or []) if isinstance(s, dict)]
     details = _detail_map(
         [d for d in list(acquisition.get("details") or []) if isinstance(d, dict)]
+    )
+    _report_progress(
+        {
+            "pages_fetched": int(page_meta.get("pages_fetched") or len(pages) or 0),
+            "pages_planned": page_cap,
+            "page_from": page0,
+            "page_current": page_meta.get("page_to", page0),
+            "checked_count": len(summaries),
+            "source_total": source_total,
+            "phase": "ingest",
+        }
     )
     recorded_items, item_ok, item_errors = _process_unique_items(
         client, run_id, summaries=summaries, details=details

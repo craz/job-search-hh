@@ -216,6 +216,10 @@ class CoreClient:
         """Finalize SearchRun to a terminal status; Core recomputes counters."""
         return self._request("POST", f"/api/v1/search-runs/{run_id}/finalize", payload=payload)
 
+    def update_search_run_progress(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Persist mid-run HH page/check progress while SearchRun is running."""
+        return self._request("POST", f"/api/v1/search-runs/{run_id}/progress", payload=payload)
+
     def ingest_vacancy(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Identity-safe Vacancy upsert (created|updated|unchanged)."""
         return self._request("POST", "/api/v1/vacancies/ingest", payload=payload)

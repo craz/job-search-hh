@@ -126,6 +126,7 @@ def _read_vacancy_pages(
     timeout_ms: int,
     fetch_details: bool = False,
     detail_limit: int = 0,
+    on_page_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Open persistent Chromium profile and fetch SERP pages + optional details."""
     del detail_ids  # ids chosen from summaries inside one session
@@ -142,6 +143,50 @@ def _read_vacancy_pages(
     pages_out: list[dict[str, Any]] = []
     details_out: list[dict[str, Any]] = []
     summaries_for_detail: list[str] = []
+    pages_planned = len(page_urls)
+    page_from = page_urls[0][0] if page_urls else 0
+
+    def _emit_page_progress(page_index: int) -> None:
+        if on_page_progress is None:
+            return
+        seen: set[str] = set()
+        source_total: int | None = None
+        for page_info in pages_out:
+            meta_obj = page_info.get("meta")
+            meta: dict[str, Any] = meta_obj if isinstance(meta_obj, dict) else {}
+            if source_total is None:
+                for key in ("source_total", "found"):
+                    raw_total = meta.get(key)
+                    if isinstance(raw_total, int):
+                        source_total = raw_total
+                        break
+                    if isinstance(raw_total, str) and raw_total.isdigit():
+                        source_total = int(raw_total)
+                        break
+                if source_total is None and meta.get("found_text"):
+                    digits = "".join(ch for ch in str(meta["found_text"]) if ch.isdigit())
+                    if digits:
+                        try:
+                            source_total = int(digits)
+                        except ValueError:
+                            source_total = None
+            for item in list(page_info.get("items") or []):
+                if isinstance(item, dict) and item.get("external_id"):
+                    seen.add(str(item["external_id"]))
+        payload: dict[str, Any] = {
+            "pages_fetched": len(pages_out),
+            "pages_planned": pages_planned,
+            "page_from": page_from,
+            "page_current": page_index,
+            "checked_count": len(seen),
+            "phase": "serp",
+        }
+        if source_total is not None:
+            payload["source_total"] = source_total
+        try:
+            on_page_progress(payload)
+        except Exception:  # noqa: BLE001 - progress must not abort acquisition
+            pass
 
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(
@@ -169,6 +214,7 @@ def _read_vacancy_pages(
                             "meta": {},
                         }
                     )
+                    _emit_page_progress(page_index)
                     continue
                 normalized = normalize_search_payload(
                     raw if isinstance(raw, dict) else {},
@@ -207,10 +253,25 @@ def _read_vacancy_pages(
                 for item in items:
                     if isinstance(item, dict) and item.get("external_id"):
                         summaries_for_detail.append(str(item["external_id"]))
+                _emit_page_progress(page_index)
 
             if fetch_details and summaries_for_detail:
+                if on_page_progress is not None:
+                    try:
+                        on_page_progress(
+                            {
+                                "pages_fetched": len(pages_out),
+                                "pages_planned": pages_planned,
+                                "page_from": page_from,
+                                "page_current": pages_out[-1]["page"] if pages_out else page_from,
+                                "checked_count": len(set(summaries_for_detail)),
+                                "phase": "details",
+                            }
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 limit = max(0, min(int(detail_limit), 200))
-                for external_id in summaries_for_detail[:limit]:
+                for detail_idx, external_id in enumerate(summaries_for_detail[:limit]):
                     detail_url = DEFAULT_VACANCY_URL_TEMPLATE.format(external_id=external_id)
                     try:
                         page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
@@ -226,6 +287,22 @@ def _read_vacancy_pages(
                                 "content": None,
                             }
                         )
+                        if on_page_progress is not None and detail_idx % 10 == 9:
+                            try:
+                                on_page_progress(
+                                    {
+                                        "pages_fetched": len(pages_out),
+                                        "pages_planned": pages_planned,
+                                        "page_from": page_from,
+                                        "page_current": (
+                                            pages_out[-1]["page"] if pages_out else page_from
+                                        ),
+                                        "checked_count": len(set(summaries_for_detail)),
+                                        "phase": "details",
+                                    }
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
                         continue
                     kind = str((raw_detail or {}).get("kind") or "invalid")
                     if kind in {
@@ -260,6 +337,22 @@ def _read_vacancy_pages(
                                 "content": None,
                             }
                         )
+                    if on_page_progress is not None and detail_idx % 10 == 9:
+                        try:
+                            on_page_progress(
+                                {
+                                    "pages_fetched": len(pages_out),
+                                    "pages_planned": pages_planned,
+                                    "page_from": page_from,
+                                    "page_current": (
+                                        pages_out[-1]["page"] if pages_out else page_from
+                                    ),
+                                    "checked_count": len(set(summaries_for_detail)),
+                                    "phase": "details",
+                                }
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
         finally:
             context.close()
 
@@ -371,6 +464,7 @@ def acquire_vacancies(
     timeout_seconds: float = 60.0,
     page_url_builder: Callable[[int], str] | None = None,
     serp_guard: Callable[..., dict[str, Any]] | None = None,
+    on_page_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Bounded list-first vacancy acquisition via browser RO transport."""
     resolved = paths or SessionPaths.from_env()
@@ -437,6 +531,7 @@ def acquire_vacancies(
                 timeout_ms=int(timeout_seconds * 1000),
                 fetch_details=bool(fetch_details),
                 detail_limit=max(0, min(int(detail_limit), 1000)),
+                **({"on_page_progress": on_page_progress} if on_page_progress is not None else {}),
             )
         finally:
             lock.release()

@@ -13,6 +13,9 @@ Semantic Versioning.
 
 ### Added
 
+- Persist SearchRun mid-run progress after each HH SERP page (and ingest phase)
+  via Core `POST /search-runs/{id}/progress` so Web can show live page/checked counts.
+
 - R2.4.1b vacancy source-status check: `GET /api/v1/vacancies/{external_id}/source-status`
   — browser RO detail extract reports `active` / `archived` / `unknown`; auth,
   CAPTCHA and transport failures never yield `archived`; no Core writes.
