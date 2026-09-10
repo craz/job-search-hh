@@ -101,3 +101,54 @@ def test_detail_extract_js_evaluates_in_playwright() -> None:
         server.server_close()
     assert detail["kind"] == "ok"
     assert detail["content"]["external_id"] == "1001"
+
+
+def test_detail_extract_js_reads_json_ld_date_posted() -> None:
+    """Fixture JSON-LD JobPosting.datePosted → source_published_at (no extra request)."""
+    pytest.importorskip("playwright.sync_api")
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from pathlib import Path
+    from threading import Thread
+
+    from playwright.sync_api import sync_playwright
+
+    from job_search_hh.vacancy_extractors import extract_detail_page, normalize_detail_payload
+
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures"
+
+    class _Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            super().__init__(*args, directory=str(fixtures), **kwargs)
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A003
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.startswith("/vacancy/"):
+                self.path = "/vacancy_detail.html"
+            super().do_GET()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    detail_url = f"http://127.0.0.1:{port}/vacancy/1001"
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            page = browser.new_page()
+            page.goto(detail_url)
+            raw = extract_detail_page(page)
+            detail = normalize_detail_payload(raw if isinstance(raw, dict) else {})
+            browser.close()
+    except Exception as error:  # pragma: no cover
+        message = str(error)
+        if "Executable doesn't exist" in message or "playwright install" in message:
+            pytest.skip(f"playwright chromium unavailable: {message}")
+        raise
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert detail["kind"] == "ok"
+    assert detail["content"]["source_published_at"] == "2026-09-10T17:36:58.633+03:00"
+    assert "10 сентября 2026" in (detail["content"].get("published_text") or "")

@@ -5,6 +5,11 @@ Semantic Versioning.
 
 ## Unreleased
 
+### Added
+
+- Detail extract: JSON-LD JobPosting `datePosted` (fallback page-state `publicationTime.$`) → `source_published_at` on NEW detail ingest; timezone normalized to UTC. No extra HH request; create-only unchanged.
+
+
 ### Fixed
 
 - Vacancy detail Playwright extract: remove duplicate `const href` in `DETAIL_EXTRACT_JS` (Page.evaluate SyntaxError was mislabeled `vacancy_detail_failed` / `network_failure` while SERP still worked).

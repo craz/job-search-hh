@@ -38,6 +38,7 @@ class HhVacancyDetail(TypedDict, total=False):
     work_format_text: str
     experience_text: str
     published_text: str
+    source_published_at: str
     archived: bool
 
 

@@ -6,6 +6,7 @@ from job_search_hh.normalize import (
     metric_idempotency_key,
     normalize_application,
     normalize_metric,
+    normalize_source_published_at,
     normalize_vacancy,
     vacancy_detail_to_ingest,
 )
@@ -141,3 +142,33 @@ def test_same_employer_name_without_id_does_not_share_company_identity() -> None
     assert a["company_external_id"] == "vacancy:100:employer"
     assert b["company_external_id"] == "vacancy:200:employer"
     assert a["company_external_id"] != b["company_external_id"]
+
+
+def test_normalize_source_published_at_converts_moscow_offset_to_utc() -> None:
+    assert (
+        normalize_source_published_at("2026-09-10T17:36:58.633+03:00")
+        == "2026-09-10T14:36:58.633000+00:00"
+    )
+
+
+def test_normalize_source_published_at_rejects_garbage() -> None:
+    assert normalize_source_published_at("Сегодня") is None
+    assert normalize_source_published_at("") is None
+    assert normalize_source_published_at(None) is None
+
+
+def test_vacancy_detail_to_ingest_maps_source_published_at() -> None:
+    payload = vacancy_detail_to_ingest(
+        {
+            "external_id": "134000626",
+            "title": "Python Engineer",
+            "url": "https://hh.ru/vacancy/134000626",
+            "employer_id": "42",
+            "employer_name": "Acme LLC",
+            "description": "Full description for scoring.",
+            "source_published_at": "2026-09-10T17:36:58.633+03:00",
+            "published_text": "10 сентября 2026",
+        }
+    )
+    assert payload["source_published_at"] == "2026-09-10T14:36:58.633000+00:00"
+    assert payload["published_text"] == "10 сентября 2026"

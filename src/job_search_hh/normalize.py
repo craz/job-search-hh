@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 SOURCE = "hh"
 
@@ -79,6 +81,27 @@ def normalize_vacancy(item: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+_MOSCOW = ZoneInfo("Europe/Moscow")
+
+
+def normalize_source_published_at(raw: object) -> str | None:
+    """Parse HH publication datetime to timezone-aware ISO (UTC).
+
+    Accepts ISO-8601 from JSON-LD ``datePosted`` / page ``publicationTime.$``.
+    Naive values are interpreted as Europe/Moscow (HH UI zone). Invalid → None.
+    """
+    text = _text(raw)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_MOSCOW)
+    return parsed.astimezone(UTC).isoformat()
+
+
 def vacancy_detail_to_ingest(detail: dict[str, Any]) -> dict[str, Any]:
     """Map HhVacancyDetail (or compatible dict) to Core VacancyIngest payload.
 
@@ -118,6 +141,11 @@ def vacancy_detail_to_ingest(detail: dict[str, Any]) -> dict[str, Any]:
         value = _text(detail.get(src_key))
         if value:
             payload[dst_key] = value
+    published_at = normalize_source_published_at(
+        detail.get("source_published_at") or detail.get("published_at")
+    )
+    if published_at:
+        payload["source_published_at"] = published_at
     if isinstance(detail.get("archived"), bool):
         payload["archived"] = detail["archived"]
     return payload

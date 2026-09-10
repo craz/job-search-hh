@@ -312,6 +312,45 @@ DETAIL_EXTRACT_JS = """() => {
     qa('[data-qa="vacancy-view-vacancy-creation-date"]') ||
     qa('[data-qa*="creation-date"]')
   );
+  // Reliable HH publication datetime already on the detail page (no extra request):
+  // prefer JSON-LD JobPosting.datePosted; fallback publicationTime.$ in page state.
+  let source_published_at = '';
+  const ldNodes = document.querySelectorAll('script[type="application/ld+json"]');
+  for (let i = 0; i < ldNodes.length; i++) {
+    try {
+      const parsed = JSON.parse(ldNodes[i].textContent || '');
+      const nodes = Array.isArray(parsed)
+        ? parsed
+        : (parsed && Array.isArray(parsed['@graph']) ? parsed['@graph'] : [parsed]);
+      for (let j = 0; j < nodes.length; j++) {
+        const node = nodes[j];
+        if (!node || typeof node !== 'object') continue;
+        const typeVal = node['@type'];
+        const isJob =
+          typeVal === 'JobPosting' ||
+          (Array.isArray(typeVal) && typeVal.indexOf('JobPosting') >= 0);
+        if (isJob && node.datePosted) {
+          source_published_at = String(node.datePosted).trim();
+          break;
+        }
+      }
+    } catch (e) {}
+    if (source_published_at) break;
+  }
+  if (!source_published_at) {
+    const html = document.documentElement
+      ? (document.documentElement.innerHTML || '')
+      : '';
+    let match = html.match(
+      /"publicationTime"\\s*:\\s*\\{[^}]*?"\\$"\\s*:\\s*"([^"]+)"/
+    );
+    if (!match) {
+      match = html.match(
+        /&quot;publicationTime&quot;:\\{[^}]*?&quot;\\$&quot;:&quot;([^&]+)&quot;/
+      );
+    }
+    if (match && match[1]) source_published_at = String(match[1]).trim();
+  }
   const archived =
     !!qa('[data-qa="vacancy-archived"]') ||
     /вакансия.*архив|в архиве/i.test(
@@ -338,6 +377,7 @@ DETAIL_EXTRACT_JS = """() => {
       work_format_text,
       experience_text,
       published_text,
+      source_published_at,
       archived,
     },
   };
