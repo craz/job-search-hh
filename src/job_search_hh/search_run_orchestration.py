@@ -1,7 +1,8 @@
 """HH-owned SearchRun orchestration (R2.2.4).
 
 Flow: SearchProfile → start SearchRun (immutable snapshots) → browser acquire →
-detail → Core ingest → SearchRunItem → finalize.
+SERP → Core bulk lookup → detail ONLY for NEW → Core ingest → SearchRunItem → finalize.
+Batch acquisition is CREATE-ONLY; existing identities skip HH detail.
 
 Browser extractors never write Core; Core owns Vacancy hash/upsert and run
 counters. Does not start Web/R2.2.5 or Scoring.
@@ -235,6 +236,13 @@ def run_vacancy_search(
     )
 
     acquirer = acquire_fn or acquire_vacancies
+    existing_map: dict[str, str] = {}
+
+    def detail_id_filter(serp_ids: list[str]) -> list[str]:
+        found = _lookup_existing_map(client, external_ids=serp_ids, source="hh")
+        existing_map.update(found)
+        return [i for i in serp_ids if i not in existing_map]
+
     try:
         acquisition = acquirer(
             criteria,
@@ -244,6 +252,7 @@ def run_vacancy_search(
             fetch_details=True,
             detail_limit=200,
             timeout_seconds=timeout_seconds,
+            detail_id_filter=detail_id_filter,
         )
     except Exception as error:  # noqa: BLE001 - finalize failed run
         try:
@@ -308,121 +317,32 @@ def run_vacancy_search(
             }
         )
 
-    item_errors = 0
-    item_ok = 0
-    seen: set[str] = set()
-    recorded_items: list[dict[str, Any]] = []
-
+    # Authoritative create-only gate (covers mocks that ignore detail_id_filter).
+    serp_ids = []
+    seen_serp: set[str] = set()
     for summary in summaries:
-        external_id = str(summary.get("external_id") or "").strip()
-        if not external_id or external_id in seen:
+        ext = str(summary.get("external_id") or "").strip()
+        if not ext or ext in seen_serp:
             continue
-        seen.add(external_id)
-        page = summary.get("source_page")
-        detail = details.get(external_id)
-        if (
-            detail is None
-            or str(detail.get("status")) != "ok"
-            or not isinstance(detail.get("content"), dict)
-        ):
-            item_errors += 1
-            code = str((detail or {}).get("code") or "vacancy_detail_failed")
-            item = _add_item(
-                client,
-                run_id,
-                {
-                    "source_external_id": external_id,
-                    "outcome": "error",
-                    "vacancy_id": None,
-                    "page": page,
-                    "error_code": code,
-                    "error_detail": "detail_fetch_or_parse_failed",
-                },
-            )
-            recorded_items.append(item or {"source_external_id": external_id, "outcome": "error"})
-            continue
-
-        try:
-            ingest_payload = vacancy_detail_to_ingest(detail["content"])
-        except NormalizeError as error:
-            item_errors += 1
-            item = _add_item(
-                client,
-                run_id,
-                {
-                    "source_external_id": external_id,
-                    "outcome": "error",
-                    "vacancy_id": None,
-                    "page": page,
-                    "error_code": "page_parse_failed",
-                    "error_detail": str(error),
-                },
-            )
-            recorded_items.append(item or {"source_external_id": external_id, "outcome": "error"})
-            continue
-
-        try:
-            ingest = client.ingest_vacancy(ingest_payload)
-        except CoreError as error:
-            item_errors += 1
-            item = _add_item(
-                client,
-                run_id,
-                {
-                    "source_external_id": external_id,
-                    "outcome": "error",
-                    "vacancy_id": None,
-                    "page": page,
-                    "error_code": "core_ingest_failed",
-                    "error_detail": str(error)[:1000],
-                },
-            )
-            recorded_items.append(item or {"source_external_id": external_id, "outcome": "error"})
-            continue
-
-        outcome = str(ingest.get("outcome") or "")
-        raw_vacancy = ingest.get("vacancy")
-        vacancy: dict[str, Any] = raw_vacancy if isinstance(raw_vacancy, dict) else {}
-        vacancy_id = vacancy.get("id")
-        if outcome not in {"created", "updated", "unchanged"} or not vacancy_id:
-            item_errors += 1
-            item = _add_item(
-                client,
-                run_id,
-                {
-                    "source_external_id": external_id,
-                    "outcome": "error",
-                    "vacancy_id": None,
-                    "page": page,
-                    "error_code": "core_ingest_failed",
-                    "error_detail": "invalid_ingest_result",
-                },
-            )
-            recorded_items.append(item or {"source_external_id": external_id, "outcome": "error"})
-            continue
-
-        item_ok += 1
-        item = _add_item(
-            client,
-            run_id,
-            {
-                "source_external_id": external_id,
-                "outcome": outcome,
-                "vacancy_id": vacancy_id,
-                "page": page,
-            },
-        )
-        recorded_items.append(
-            item
-            or {
-                "source_external_id": external_id,
-                "outcome": outcome,
-                "vacancy_id": vacancy_id,
-            }
-        )
-
+        seen_serp.add(ext)
+        serp_ids.append(ext)
+    existing_map.update(_lookup_existing_map(client, external_ids=serp_ids, source="hh"))
+    recorded_items, item_ok, item_errors = _process_unique_items(
+        client,
+        run_id,
+        summaries=summaries,
+        details=details,
+        existing_map=existing_map,
+    )
     base["items"] = recorded_items
-    # pagination metadata (max_pages_reached / exhausted) lives on acquisition;
+    base["acquisition_counts"] = {
+        "serp_checked": len(serp_ids),
+        "already_in_db": sum(1 for i in serp_ids if i in existing_map),
+        "new_ids": sum(1 for i in serp_ids if i not in existing_map),
+        "hh_cards_fetched": len(details),
+        "detail_errors": sum(1 for d in details.values() if str(d.get("status")) != "ok"),
+    }
+    # pagination metadata    # pagination metadata (max_pages_reached / exhausted) lives on acquisition;
     # intentional max_pages bound alone is success, not partial.
 
     # Terminal status matrix.
@@ -524,14 +444,56 @@ def _candidate_context_for_active_resume(
     return context
 
 
+def _lookup_existing_map(
+    client: CoreClient, *, external_ids: list[str], source: str = "hh"
+) -> dict[str, str]:
+    """Bulk Core existence check → {external_id: vacancy_id} for create-only."""
+    ids = [str(x).strip() for x in external_ids if str(x).strip()]
+    if not ids:
+        return {}
+    # Chunk to Core's 500-id cap.
+    out: dict[str, str] = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        try:
+            payload = client.lookup_vacancies_by_external_ids(source=source, external_ids=chunk)
+        except CoreError:
+            # Fail closed for create-only safety: if lookup fails, treat none as existing
+            # so we still attempt detail+ingest rather than silently skipping new cards.
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for item in list(payload.get("items") or []):
+            if not isinstance(item, dict):
+                continue
+            ext = str(item.get("external_id") or "").strip()
+            vid = str(item.get("vacancy_id") or "").strip()
+            if ext and vid:
+                out[ext] = vid
+        for ext in list(payload.get("existing_ids") or []):
+            key = str(ext or "").strip()
+            if key and key not in out:
+                # items should carry vacancy_id; existing_ids alone is not enough to record
+                pass
+    return out
+
+
 def _process_unique_items(
     client: CoreClient,
     run_id: str,
     *,
     summaries: list[dict[str, Any]],
     details: dict[str, dict[str, Any]],
+    existing_map: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
-    """Ingest unique summaries; return (items, ok_count, error_count)."""
+    """Create-only ingest of unique SERP summaries.
+
+    Existing identities (``existing_map``) are recorded as ``unchanged`` without
+    HH detail/ingest — batch acquisition never updates known vacancies.
+    New identities require a successful detail → Core ingest.
+    Returns (items, ok_count, error_count).
+    """
+    known = dict(existing_map or {})
     item_errors = 0
     item_ok = 0
     seen: set[str] = set()
@@ -542,6 +504,29 @@ def _process_unique_items(
             continue
         seen.add(external_id)
         page = summary.get("source_page")
+
+        if external_id in known:
+            item_ok += 1
+            item = _add_item(
+                client,
+                run_id,
+                {
+                    "source_external_id": external_id,
+                    "outcome": "unchanged",
+                    "vacancy_id": known[external_id],
+                    "page": page,
+                },
+            )
+            recorded_items.append(
+                item
+                or {
+                    "source_external_id": external_id,
+                    "outcome": "unchanged",
+                    "vacancy_id": known[external_id],
+                }
+            )
+            continue
+
         detail = details.get(external_id)
         if (
             detail is None
@@ -758,6 +743,22 @@ def run_resume_suitable_search(
         )
 
     try:
+        existing_map: dict[str, str] = {}
+
+        def detail_id_filter(serp_ids: list[str]) -> list[str]:
+            found = _lookup_existing_map(client, external_ids=serp_ids, source="hh")
+            existing_map.update(found)
+            new_ids = [i for i in serp_ids if i not in existing_map]
+            _report_progress(
+                {
+                    "checked_count": len(serp_ids),
+                    "unchanged_count": len(existing_map),
+                    "phase": "details" if new_ids else "ingest",
+                    "detail_planned": len(new_ids),
+                }
+            )
+            return new_ids
+
         acquisition = acquire_vacancies(
             SearchCriteria(),  # not used for URL when page_url_builder is set
             policy,
@@ -769,6 +770,7 @@ def run_resume_suitable_search(
             page_url_builder=page_url_builder,
             serp_guard=serp_guard,
             on_page_progress=_report_progress,
+            detail_id_filter=detail_id_filter,
         )
     except Exception as error:  # noqa: BLE001
         try:
@@ -864,10 +866,45 @@ def run_resume_suitable_search(
             "challenge_vacancy_id": acquisition.get("wall_detail_id"),
         }
     )
+    serp_ids = []
+    seen_serp: set[str] = set()
+    for summary in summaries:
+        ext = str(summary.get("external_id") or "").strip()
+        if not ext or ext in seen_serp:
+            continue
+        seen_serp.add(ext)
+        serp_ids.append(ext)
+    existing_map.update(_lookup_existing_map(client, external_ids=serp_ids, source="hh"))
     recorded_items, item_ok, item_errors = _process_unique_items(
-        client, run_id, summaries=summaries, details=details
+        client,
+        run_id,
+        summaries=summaries,
+        details=details,
+        existing_map=existing_map,
     )
     base["items"] = recorded_items
+    created_n = sum(1 for i in recorded_items if i.get("outcome") == "created")
+    updated_n = sum(1 for i in recorded_items if i.get("outcome") == "updated")
+    unchanged_n = sum(1 for i in recorded_items if i.get("outcome") == "unchanged")
+    base["acquisition_counts"] = {
+        "serp_checked": len(serp_ids),
+        "already_in_db": sum(1 for i in serp_ids if i in existing_map),
+        "new_ids": sum(1 for i in serp_ids if i not in existing_map),
+        "hh_cards_fetched": len(details),
+        "created": created_n,
+        "updated": updated_n,
+        "detail_errors": sum(1 for d in details.values() if str(d.get("status")) != "ok"),
+    }
+    _report_progress(
+        {
+            "checked_count": len(serp_ids),
+            "created_count": created_n,
+            "updated_count": updated_n,
+            "unchanged_count": unchanged_n,
+            "phase": "ingest",
+            "detail_fetched": len(details),
+        }
+    )
 
     if captcha_hit:
         terminal, error_code = _terminal_for_captcha(ok_pages=ok_pages, item_ok=item_ok)

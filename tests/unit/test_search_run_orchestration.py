@@ -122,6 +122,22 @@ class FakeCore:
         existing.update(payload)
         return {"outcome": "updated", "vacancy": existing}
 
+    def lookup_vacancies_by_external_ids(
+        self, *, source: str, external_ids: list[str]
+    ) -> dict[str, Any]:
+        items = []
+        for ext in external_ids:
+            key = str(ext or "").strip()
+            vac = self.vacancies.get(key)
+            if vac is None:
+                continue
+            items.append({"external_id": key, "vacancy_id": vac["id"]})
+        return {
+            "source": source,
+            "existing_ids": [i["external_id"] for i in items],
+            "items": items,
+        }
+
     def finalize_search_run(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         run = self.runs[run_id]
         if run["status"] != "running":
@@ -542,15 +558,84 @@ def test_repeat_run_unchanged_and_new_run_id() -> None:
         core=core,  # type: ignore[arg-type]
         acquire_fn=lambda *a, **k: _ok_acquire(ids=["1001"]),
     )
+    ingest_after_first = len(core.ingest_calls)
     second = run_vacancy_search(
         search_profile_id=core.profile["id"],
         core=core,  # type: ignore[arg-type]
+        # Create-only: even if a stale acquire returns a detail, Core lookup skips ingest.
         acquire_fn=lambda *a, **k: _ok_acquire(ids=["1001"]),
     )
     assert first["search_run"]["id"] != second["search_run"]["id"]
     assert first["search_run"]["created_count"] == 1
     assert second["search_run"]["unchanged_count"] == 1
+    assert second["search_run"]["created_count"] == 0
+    assert second["search_run"]["updated_count"] == 0
+    assert len(core.ingest_calls) == ingest_after_first
     assert len(core.vacancies) == 1
+    assert second.get("acquisition_counts", {}).get("already_in_db") == 1
+    assert second.get("acquisition_counts", {}).get("hh_cards_fetched") == 1
+
+
+def test_create_only_skips_detail_ingest_for_existing() -> None:
+    core = FakeCore()
+    # Seed Core identity without going through acquire.
+    core.vacancies["1001"] = {
+        "id": str(uuid.uuid4()),
+        "external_id": "1001",
+        "title": "Seeded",
+        "description": "seed",
+    }
+    filter_calls: list[list[str]] = []
+
+    def acquire_fn(*_a: Any, **kwargs: Any) -> dict[str, Any]:
+        detail_id_filter = kwargs.get("detail_id_filter")
+        ids = ["1001", "1002"]
+        if callable(detail_id_filter):
+            filtered = detail_id_filter(ids)
+            filter_calls.append(list(filtered))
+            details = [_detail(i) for i in filtered]
+        else:
+            details = [_detail(i) for i in ids]
+        summaries = [
+            {
+                "external_id": i,
+                "title": f"Title {i}",
+                "url": f"https://hh.ru/vacancy/{i}",
+                "source_page": 0,
+            }
+            for i in ids
+        ]
+        return {
+            "status": STATUS_AVAILABLE,
+            "code": "ready",
+            "pages": [{"page": 0, "status": "ok", "items": summaries, "meta": {}}],
+            "summaries": summaries,
+            "details": details,
+            "pagination": {
+                "pages_fetched": 1,
+                "max_pages": 1,
+                "failed_pages": 0,
+                "detail_failures": 0,
+            },
+            "action": {"code": "none"},
+            "recovery": None,
+        }
+
+    report = run_vacancy_search(
+        search_profile_id=core.profile["id"],
+        core=core,  # type: ignore[arg-type]
+        acquire_fn=acquire_fn,
+    )
+    assert report["status"] == "success"
+    assert filter_calls and filter_calls[0] == ["1002"]
+    assert len(core.ingest_calls) == 1
+    assert core.ingest_calls[0]["external_id"] == "1002"
+    outcomes = {i["source_external_id"]: i["outcome"] for i in report["items"]}
+    assert outcomes["1001"] == "unchanged"
+    assert outcomes["1002"] == "created"
+    assert report["search_run"]["unchanged_count"] == 1
+    assert report["search_run"]["created_count"] == 1
+    assert report["acquisition_counts"]["hh_cards_fetched"] == 1
 
 
 def test_terminal_immutability_blocks_new_items() -> None:

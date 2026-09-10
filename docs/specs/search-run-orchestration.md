@@ -95,3 +95,17 @@ HH HTTP/CLI
 
 Web CTA polish beyond R2.2.5, Scoring/Ollama, fuzzy dedupe, scheduled search,
 manual-search staging import, R2.2.A, R2.3.
+
+
+## Create-only acquisition (post-v1)
+
+Batch SearchRun acquisition (profile + resume_suitable):
+
+1. SERP pages collect vacancy ids (enough to know identity).
+2. Core `POST /api/v1/vacancies/lookup-by-external-ids` marks EXISTING.
+3. HH detail pages are fetched **only for NEW** ids.
+4. NEW → Core ingest (`created`); EXISTING → SearchRunItem `unchanged` without detail.
+5. Updates are **not** part of batch; owner uses manual refresh-content.
+
+Counters: serp checked, new ids, already in DB (`unchanged_count`), HH cards
+fetched (`details` length), created, detail errors. `updated_count` is normally 0.

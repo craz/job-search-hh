@@ -27,6 +27,7 @@ from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.search_run_orchestration import run_resume_suitable_search, run_vacancy_search
 from job_search_hh.session import SessionError, SessionPaths, clear_login, confirm_login, open_login
 from job_search_hh.vacancy_source_status import check_vacancy_source_status
+from job_search_hh.vacancy_content_refresh import refresh_vacancy_content
 
 
 def _secret_leak(payload: dict[str, Any]) -> bool:
@@ -325,6 +326,27 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
                 self._json(status, report)
                 return
+            parts = [p for p in parsed.path.split("/") if p]
+            if (
+                len(parts) == 5
+                and parts[0] == "api"
+                and parts[1] == "v1"
+                and parts[2] == "vacancies"
+                and parts[4] == "refresh-content"
+                and parts[3]
+            ):
+                report = refresh_vacancy_content(parts[3])
+                status = (
+                    HTTPStatus.OK
+                    if report.get("ok")
+                    else (
+                        HTTPStatus.CONFLICT
+                        if str(report.get("code") or "") not in {"invalid_vacancy_id"}
+                        else HTTPStatus.BAD_REQUEST
+                    )
+                )
+                self._json(status, report)
+                return
             if parsed.path == "/api/v1/vacancies/suitable":
                 execution = body.get("execution")
                 if execution is not None and not isinstance(execution, dict):
@@ -412,9 +434,7 @@ def main() -> None:
 
     from job_search_hh.challenge_handoff import CAPTURE_IMPL_ID
 
-    logging.getLogger("job_search_hh").info(
-        "hh_api_start capture_impl=%s", CAPTURE_IMPL_ID
-    )
+    logging.getLogger("job_search_hh").info("hh_api_start capture_impl=%s", CAPTURE_IMPL_ID)
     port = int(os.getenv("HH_API_PORT", os.getenv("JOB_SEARCH_HH_API_PORT", "8092")))
     ThreadingHTTPServer(("0.0.0.0", port), ApiHandler).serve_forever()
 

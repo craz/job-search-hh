@@ -199,9 +199,15 @@ def _read_vacancy_pages(
     fetch_details: bool = False,
     detail_limit: int = 0,
     on_page_progress: Callable[[dict[str, Any]], None] | None = None,
+    detail_id_filter: Callable[[list[str]], list[str]] | None = None,
 ) -> dict[str, Any]:
-    """Open persistent Chromium profile and fetch SERP pages + optional details."""
-    del detail_ids  # ids chosen from summaries inside one session
+    """Open persistent Chromium profile and fetch SERP pages + optional details.
+
+    When ``detail_id_filter`` is set (create-only), it receives unique SERP ids and
+    must return the subset that still need HH detail fetches (typically NEW only).
+    ``detail_ids`` is reserved for explicit allowlists; when non-empty it intersects
+    the filtered set.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as error:  # pragma: no cover
@@ -385,8 +391,24 @@ def _read_vacancy_pages(
                         )
                     except Exception:  # noqa: BLE001
                         pass
-                limit = max(0, min(int(detail_limit), 200))
-                for detail_idx, external_id in enumerate(summaries_for_detail[:limit]):
+                # Create-only: optionally drop ids Core already owns before detail work.
+                unique_serp_ids: list[str] = list(dict.fromkeys(summaries_for_detail))
+                allow = [str(x).strip() for x in (detail_ids or []) if str(x).strip()]
+                candidate_ids = unique_serp_ids
+                if allow:
+                    allow_set = set(allow)
+                    candidate_ids = [i for i in unique_serp_ids if i in allow_set]
+                if detail_id_filter is not None:
+                    try:
+                        filtered = detail_id_filter(list(candidate_ids))
+                    except Exception:  # noqa: BLE001 - fail open to no details rather than all
+                        filtered = []
+                    if not isinstance(filtered, list):
+                        filtered = []
+                    allowed_new = {str(x).strip() for x in filtered if str(x).strip()}
+                    candidate_ids = [i for i in candidate_ids if i in allowed_new]
+                limit = max(0, min(int(detail_limit), 1000))
+                for detail_idx, external_id in enumerate(candidate_ids[:limit]):
                     detail_url = DEFAULT_VACANCY_URL_TEMPLATE.format(external_id=external_id)
                     try:
                         page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
@@ -520,8 +542,7 @@ def _read_vacancy_pages(
                                 evidence = _persist_captcha_before_close(
                                     page,
                                     vacancy_id=external_id,
-                                    challenge_url_hint=hint
-                                    or str(getattr(page, "url", "") or ""),
+                                    challenge_url_hint=hint or str(getattr(page, "url", "") or ""),
                                 )
                             except Exception:  # noqa: BLE001
                                 evidence = {
@@ -537,9 +558,7 @@ def _read_vacancy_pages(
                             "details": details_out,
                             "wall_detail_id": external_id,
                             "challenge_url": str(
-                                evidence.get("challenge_url")
-                                or getattr(page, "url", "")
-                                or ""
+                                evidence.get("challenge_url") or getattr(page, "url", "") or ""
                             ),
                         }
                         if evidence.get("challenge_title"):
@@ -698,6 +717,7 @@ def acquire_vacancies(
     page_url_builder: Callable[[int], str] | None = None,
     serp_guard: Callable[..., dict[str, Any]] | None = None,
     on_page_progress: Callable[[dict[str, Any]], None] | None = None,
+    detail_id_filter: Callable[[list[str]], list[str]] | None = None,
 ) -> dict[str, Any]:
     """Bounded list-first vacancy acquisition via browser RO transport."""
     resolved = paths or SessionPaths.from_env()
@@ -757,15 +777,19 @@ def acquire_vacancies(
     try:
         lock.acquire("vacancy-browser-ro")
         try:
-            raw = reader(
-                profile_dir=resolved.profile_dir,
-                page_urls=page_urls,
-                detail_ids=[],
-                timeout_ms=int(timeout_seconds * 1000),
-                fetch_details=bool(fetch_details),
-                detail_limit=max(0, min(int(detail_limit), 1000)),
-                **({"on_page_progress": on_page_progress} if on_page_progress is not None else {}),
-            )
+            reader_kwargs: dict[str, Any] = {
+                "profile_dir": resolved.profile_dir,
+                "page_urls": page_urls,
+                "detail_ids": [],
+                "timeout_ms": int(timeout_seconds * 1000),
+                "fetch_details": bool(fetch_details),
+                "detail_limit": max(0, min(int(detail_limit), 1000)),
+            }
+            if on_page_progress is not None:
+                reader_kwargs["on_page_progress"] = on_page_progress
+            if detail_id_filter is not None:
+                reader_kwargs["detail_id_filter"] = detail_id_filter
+            raw = reader(**reader_kwargs)
         finally:
             lock.release()
     except SessionError as error:
@@ -835,6 +859,8 @@ def acquire_vacancies(
     details = [d for d in list(raw.get("details") or []) if isinstance(d, dict)]
     report["summaries"] = summaries
     report["details"] = details
+    report["detail_requests"] = len(details)
+    report["serp_ids"] = [str(s.get("external_id") or "") for s in summaries]
 
     if wall == "login_required" and ok_pages == 0:
         return with_recovery(

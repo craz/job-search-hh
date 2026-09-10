@@ -5,6 +5,20 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Batch HH acquisition is **create-only**: SERP ids → Core
+  `lookup-by-external-ids` → HH detail fetch only for NEW → ingest.
+  Existing identities are recorded as SearchRunItem `unchanged` without
+  detail download. Manual «Проверить обновления» refreshes one vacancy.
+- Automation inherits create-only via `/vacancies/suitable` (no periodic
+  refresh of all known HH vacancies).
+
+### Added
+
+- `POST /api/v1/vacancies/{external_id}/refresh-content` for owner-triggered
+  single-vacancy detail → Core ingest.
+
 ### Fixed
 
 - CAPTCHA live handoff: persist challenge URL/title/screenshot *before*

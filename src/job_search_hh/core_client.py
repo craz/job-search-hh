@@ -223,3 +223,13 @@ class CoreClient:
     def ingest_vacancy(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Identity-safe Vacancy upsert (created|updated|unchanged)."""
         return self._request("POST", "/api/v1/vacancies/ingest", payload=payload)
+
+    def lookup_vacancies_by_external_ids(
+        self, *, source: str, external_ids: list[str]
+    ) -> dict[str, Any]:
+        """Batch existence check: which (source, external_id) Core already owns."""
+        return self._request(
+            "POST",
+            "/api/v1/vacancies/lookup-by-external-ids",
+            payload={"source": source, "external_ids": list(external_ids)},
+        )
