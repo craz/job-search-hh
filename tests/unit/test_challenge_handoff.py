@@ -8,21 +8,26 @@ from typing import Any
 import pytest
 
 from job_search_hh.challenge_handoff import (
+    ACTION_CHALLENGE_CAPTURE_FAILED,
     ACTION_OPEN_CHALLENGE,
+    CAPTURE_FAILED,
+    CAPTURE_NO_SCREENSHOT,
+    CAPTURE_OK,
     begin_challenge_handoff,
     captcha_tg_configured,
+    capture_and_persist_live_challenge,
     capture_challenge_screenshot,
     clear_challenge_state,
     confirm_challenge_cleared,
     notify_challenge_telegram,
+    open_challenge_browser,
     public_challenge_view,
     read_challenge_state,
     write_challenge_state,
 )
-from job_search_hh.session import SessionPaths
+from job_search_hh.session import SessionError, SessionPaths, confirm_login
 from job_search_hh.vacancy_browser import STATUS_ACTION_REQUIRED, acquire_vacancies
 from job_search_hh.vacancy_query import ExecutionPolicy, SearchCriteria
-from job_search_hh.session import confirm_login
 
 
 def _paths(tmp_path: Path) -> SessionPaths:
@@ -30,12 +35,24 @@ def _paths(tmp_path: Path) -> SessionPaths:
 
 
 class _ShotPage:
-    def __init__(self) -> None:
+    def __init__(
+        self, *, url: str = "https://hh.ru/showcaptcha?d=1", title: str = "SmartCaptcha"
+    ) -> None:
         self.called = False
+        self.url = url
+        self._title = title
 
     def screenshot(self, *, path: str, full_page: bool = False) -> None:
         self.called = True
         Path(path).write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    def title(self) -> str:
+        return self._title
+
+
+class _FailShotPage(_ShotPage):
+    def screenshot(self, *, path: str, full_page: bool = False) -> None:
+        raise RuntimeError("shot_boom")
 
 
 def test_capture_screenshot_from_challenged_page(tmp_path: Path) -> None:
@@ -45,6 +62,54 @@ def test_capture_screenshot_from_challenged_page(tmp_path: Path) -> None:
     assert page.called is True
     assert shot["screenshot_available"] is True
     assert (paths.state_dir / "challenges" / shot["screenshot_filename"]).is_file()
+
+
+def test_capture_and_persist_before_close_writes_url_and_shot(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    page = _ShotPage(url="https://hh.ru/showcaptcha?d=live")
+    evidence = capture_and_persist_live_challenge(
+        page,
+        vacancy_id="1002",
+        progress={"pages_fetched": 5, "checked_count": 250, "phase": "captcha_required"},
+        paths=paths,
+    )
+    assert page.called is True
+    assert evidence["challenge_url"].endswith("showcaptcha?d=live")
+    assert evidence["screenshot"]["screenshot_available"] is True
+    assert evidence["recovery_available"] is True
+    assert evidence["capture_status"] == CAPTURE_OK
+    state = read_challenge_state(paths)
+    assert state is not None
+    assert state["challenge_url"].endswith("showcaptcha?d=live")
+    assert state["screenshot_available"] is True
+    assert (paths.state_dir / "challenges" / state["screenshot_filename"]).is_file()
+
+
+def test_capture_class_b_url_without_screenshot(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    page = _FailShotPage(url="https://hh.ru/showcaptcha?d=b")
+    evidence = capture_and_persist_live_challenge(page, paths=paths)
+    assert evidence["recovery_available"] is True
+    assert evidence["capture_status"] == CAPTURE_NO_SCREENSHOT
+    assert evidence["screenshot"]["screenshot_error"] == "RuntimeError"
+    state = read_challenge_state(paths)
+    assert state is not None
+    assert state["challenge_url"].endswith("showcaptcha?d=b")
+    assert state["screenshot_available"] is False
+
+
+def test_capture_class_c_missing_url_no_recovery(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    page = _ShotPage(url="")
+    evidence = capture_and_persist_live_challenge(page, paths=paths)
+    assert evidence["challenge_url"] == ""
+    assert evidence["recovery_available"] is False
+    assert evidence["capture_status"] == CAPTURE_FAILED
+    view = public_challenge_view(paths)
+    assert view is not None
+    assert view["recovery_available"] is False
+    assert view["challenge_url"] is None
+    assert view["novnc_url"] is None
 
 
 def test_telegram_notify_skipped_when_not_configured(
@@ -85,6 +150,7 @@ def test_begin_handoff_persists_operator_state_without_login_action(
     assert report["action"]["code"] == ACTION_OPEN_CHALLENGE
     assert report["action"]["code"] != "open_login"
     assert report["action"]["code"] != "confirm_login"
+    assert report["recovery_available"] is True
     state = read_challenge_state(paths)
     assert state is not None
     assert state["status"] == "operator_action_required"
@@ -93,6 +159,98 @@ def test_begin_handoff_persists_operator_state_without_login_action(
     assert view is not None
     assert "screenshot_path" not in view
     assert view["screenshot_available"] is True
+
+
+def test_begin_handoff_missing_url_is_capture_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setenv("HH_CAPTCHA_TG", "0")
+    report = begin_challenge_handoff(
+        challenge_url="",
+        screenshot={"screenshot_available": False, "screenshot_error": "Empty"},
+        paths=paths,
+        auto_open_browser=False,
+    )
+    assert report["action"]["code"] == ACTION_CHALLENGE_CAPTURE_FAILED
+    assert report["recovery_available"] is False
+    assert report["action"]["novnc_url"] is None
+
+
+def test_open_challenge_chromium_exit_not_interactive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    write_challenge_state(
+        challenge_url="https://hh.ru/showcaptcha?d=1",
+        paths=paths,
+        screenshot={"screenshot_available": True, "screenshot_filename": "a.png"},
+    )
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff.require_interactive_login_runtime", lambda: None
+    )
+    monkeypatch.setattr(
+        "job_search_hh.browser._clear_stale_chromium_singleton", lambda *_a, **_k: None
+    )
+
+    class _DeadChild:
+        pid = 4242
+
+        def poll(self) -> int:
+            return 1
+
+        def terminate(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff.subprocess.Popen",
+        lambda *a, **k: _DeadChild(),
+    )
+    with pytest.raises(SessionError, match="browser_launch_failed"):
+        open_challenge_browser(paths=paths)
+
+
+def test_open_challenge_alive_sets_interactive_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    write_challenge_state(
+        challenge_url="https://hh.ru/showcaptcha?d=1",
+        paths=paths,
+        screenshot={"screenshot_available": True, "screenshot_filename": "a.png"},
+    )
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff.require_interactive_login_runtime", lambda: None
+    )
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff.interactive_display_ready", lambda: True
+    )
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff.novnc_public_url",
+        lambda: "http://127.0.0.1:6080/vnc.html",
+    )
+    monkeypatch.setattr(
+        "job_search_hh.browser._clear_stale_chromium_singleton", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr("job_search_hh.challenge_handoff.time.sleep", lambda *_a, **_k: None)
+
+    class _AliveChild:
+        pid = 7777
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "job_search_hh.challenge_handoff.subprocess.Popen",
+        lambda *a, **k: _AliveChild(),
+    )
+    report = open_challenge_browser(paths=paths)
+    assert report["browser_started"] is True
+    assert report["interactive_ready"] is True
+    assert report["ok"] is True
 
 
 def test_confirm_clears_only_when_challenge_gone(tmp_path: Path) -> None:
@@ -105,7 +263,6 @@ def test_confirm_clears_only_when_challenge_gone(tmp_path: Path) -> None:
     assert read_challenge_state(paths) is not None
     clear_challenge_state(paths)
     assert read_challenge_state(paths) is None
-    # No active challenge → confirm reports cleared without probing the network.
     result = confirm_challenge_cleared(paths)
     assert result["ok"] is True
     assert result["cleared"] is True
@@ -130,7 +287,9 @@ def test_acquire_captcha_uses_open_challenge_not_login(
                 "screenshot_available": True,
                 "challenge_session_available": False,
                 "challenge_url": raw.get("challenge_url"),
+                "recovery_available": True,
             },
+            "recovery_available": True,
         },
     )
 
@@ -151,6 +310,33 @@ def test_acquire_captcha_uses_open_challenge_not_login(
     assert report["screenshot_available"] is True
 
 
+def test_acquire_does_not_fabricate_challenge_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HH_CHROMIUM_INSTALLED", "1")
+    paths = _paths(tmp_path)
+    confirm_login(paths, confirmed=True)
+    monkeypatch.setenv("HH_CAPTCHA_TG", "0")
+
+    def captcha(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "kind": "captcha_or_action_required",
+            "pages": [],
+            "details": [],
+            "challenge_url": "",
+            "screenshot": {"screenshot_available": False, "screenshot_error": "gone"},
+        }
+
+    report = acquire_vacancies(SearchCriteria(text="python"), paths=paths, page_reader=captcha)
+    assert report["status"] == STATUS_ACTION_REQUIRED
+    assert report["action"]["code"] == ACTION_CHALLENGE_CAPTURE_FAILED
+    assert report.get("challenge_url") in {None, ""}
+    assert report["recovery_available"] is False
+    state = read_challenge_state(paths)
+    assert state is not None
+    assert state["capture_status"] == CAPTURE_FAILED
+
+
 def test_mid_details_captcha_stops_and_handoff_action(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -161,7 +347,12 @@ def test_mid_details_captcha_stops_and_handoff_action(
         "job_search_hh.vacancy_browser._finalize_captcha_handoff",
         lambda raw, report, resolved: {
             "action": {"code": "open_challenge", "novnc_url": "http://127.0.0.1:6080/vnc.html"},
-            "challenge": {"screenshot_available": bool((raw.get("screenshot") or {}).get("screenshot_available"))},
+            "challenge": {
+                "screenshot_available": bool(
+                    (raw.get("screenshot") or {}).get("screenshot_available")
+                )
+            },
+            "recovery_available": True,
         },
     )
 
@@ -219,3 +410,15 @@ def test_mid_details_captcha_stops_and_handoff_action(
     assert report["action"]["code"] == "open_challenge"
     assert len(report["details"]) == 1
     assert report["code"] != "browser_proxy_unavailable"
+
+
+def test_open_challenge_rejects_missing_url(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    write_challenge_state(
+        challenge_url="",
+        paths=paths,
+        screenshot={"screenshot_available": False},
+        capture_status=CAPTURE_FAILED,
+    )
+    with pytest.raises(SessionError, match="challenge_url_missing"):
+        open_challenge_browser(paths=paths)

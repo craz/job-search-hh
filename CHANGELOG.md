@@ -7,6 +7,10 @@ Semantic Versioning.
 
 ### Fixed
 
+- CAPTCHA live handoff: persist challenge URL/title/screenshot *before*
+  Playwright ``context.close``; distinguish capture A/B/C; never fabricate
+  ``https://hh.ru/captcha``; ``open-challenge`` returns
+  ``interactive_ready`` only when headed Chromium stays alive on ``:99``.
 - CAPTCHA operator handoff: capture screenshot from the challenged headless
   scraper context, persist private challenge state, open headed Chromium at the
   *challenge URL* (not `/account/login`), optional Telegram DM notify only when

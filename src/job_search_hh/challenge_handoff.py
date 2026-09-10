@@ -86,6 +86,25 @@ def clear_challenge_state(paths: SessionPaths | None = None) -> None:
         path.unlink()
 
 
+# Capture classes for operator recovery UX:
+# A — URL + screenshot; B — URL, screenshot failed; C — captcha seen, handoff capture failed.
+CAPTURE_OK = "captured"  # A
+CAPTURE_NO_SCREENSHOT = "captured_no_screenshot"  # B
+CAPTURE_FAILED = "capture_failed"  # C
+ACTION_CHALLENGE_CAPTURE_FAILED = "challenge_capture_failed"
+
+
+def classify_capture(*, challenge_url: str, screenshot: dict[str, Any] | None) -> str:
+    """Return capture class A/B/C code for challenge_active state."""
+    url = (challenge_url or "").strip()
+    shot = screenshot or {}
+    if not url:
+        return CAPTURE_FAILED
+    if shot.get("screenshot_available"):
+        return CAPTURE_OK
+    return CAPTURE_NO_SCREENSHOT
+
+
 def capture_challenge_screenshot(page: Any, *, paths: SessionPaths | None = None) -> dict[str, Any]:
     """Capture PNG from the live challenged Playwright page into private state."""
     resolved = paths or SessionPaths.from_env()
@@ -98,6 +117,7 @@ def capture_challenge_screenshot(page: Any, *, paths: SessionPaths | None = None
         return {
             "screenshot_available": False,
             "screenshot_error": type(error).__name__,
+            "screenshot_error_detail": str(error)[:240],
         }
     return {
         "screenshot_available": True,
@@ -109,34 +129,49 @@ def capture_challenge_screenshot(page: Any, *, paths: SessionPaths | None = None
 
 def write_challenge_state(
     *,
-    challenge_url: str,
+    challenge_url: str = "",
     challenge_title: str = "",
     run_id: str | None = None,
     vacancy_id: str | None = None,
     progress: dict[str, Any] | None = None,
     screenshot: dict[str, Any] | None = None,
     paths: SessionPaths | None = None,
+    capture_status: str | None = None,
 ) -> dict[str, Any]:
     resolved = paths or SessionPaths.from_env()
     shot = screenshot or {}
+    url = (challenge_url or "").strip()
+    status = capture_status or classify_capture(challenge_url=url, screenshot=shot)
+    recovery_available = status in {CAPTURE_OK, CAPTURE_NO_SCREENSHOT} and bool(url)
     state = {
         "status": "operator_action_required",
         "code": "browser_captcha_or_action_required",
         "detected_at": _utc_now(),
-        "challenge_url": challenge_url,
+        "challenge_url": url or None,
         "challenge_title": challenge_title,
         "run_id": run_id,
         "vacancy_id": vacancy_id,
         "progress": progress or {},
         "screenshot_available": bool(shot.get("screenshot_available")),
         "screenshot_filename": shot.get("screenshot_filename"),
+        "screenshot_error": shot.get("screenshot_error"),
+        "screenshot_error_detail": shot.get("screenshot_error_detail"),
+        "capture_status": status,
+        "recovery_available": recovery_available,
         "challenge_session_available": False,
         "handoff_pid": None,
-        "novnc_url": novnc_public_url() if novnc_configured() else None,
+        "novnc_url": (
+            novnc_public_url() if recovery_available and novnc_configured() else None
+        ),
         "note": (
             "Challenge was captured in headless scraper context. "
             "Manual recovery opens headed Chromium at the challenge URL on the "
             "same persistent profile — not a fresh login page."
+            if recovery_available
+            else (
+                "CAPTCHA was detected but challenge URL/screenshot could not be "
+                "persisted for noVNC recovery. Retry acquisition after checking HH."
+            )
         ),
     }
     challenge_state_path(resolved).write_text(
@@ -145,6 +180,70 @@ def write_challenge_state(
     )
     return state
 
+
+def capture_and_persist_live_challenge(
+    page: Any,
+    *,
+    challenge_url_hint: str | None = None,
+    run_id: str | None = None,
+    vacancy_id: str | None = None,
+    progress: dict[str, Any] | None = None,
+    paths: SessionPaths | None = None,
+) -> dict[str, Any]:
+    """Atomically capture URL/title/screenshot and persist state while page is live.
+
+    Must run before Playwright ``context.close`` and before terminal status raise.
+    Never fabricates a challenge URL.
+    """
+    resolved = paths or SessionPaths.from_env()
+    url = (challenge_url_hint or "").strip()
+    if not url:
+        try:
+            url = str(getattr(page, "url", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            url = ""
+    title = ""
+    try:
+        title = str(page.title() or "")
+    except Exception as error:  # noqa: BLE001
+        title = ""
+        title_error = type(error).__name__
+    else:
+        title_error = None
+
+    screenshot: dict[str, Any]
+    try:
+        screenshot = capture_challenge_screenshot(page, paths=resolved)
+    except Exception as error:  # noqa: BLE001
+        screenshot = {
+            "screenshot_available": False,
+            "screenshot_error": type(error).__name__,
+            "screenshot_error_detail": str(error)[:240],
+        }
+
+    state = write_challenge_state(
+        challenge_url=url,
+        challenge_title=title,
+        run_id=run_id,
+        vacancy_id=vacancy_id,
+        progress=progress,
+        screenshot=screenshot,
+        paths=resolved,
+    )
+    if title_error and not state.get("screenshot_error"):
+        state["title_error"] = title_error
+        challenge_state_path(resolved).write_text(
+            json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return {
+        "challenge_url": url,
+        "challenge_title": title,
+        "screenshot": screenshot,
+        "challenge": state,
+        "recovery_available": bool(state.get("recovery_available")),
+        "capture_status": state.get("capture_status"),
+    }
 
 def notify_challenge_telegram(state: dict[str, Any]) -> dict[str, Any]:
     """Best-effort DM notify when explicitly configured; never invents credentials."""
@@ -238,11 +337,17 @@ def open_challenge_browser(
     paths: SessionPaths | None = None,
     detach: bool = True,
 ) -> dict[str, Any]:
-    """Open headed Chromium at the challenge URL on the persistent profile (noVNC)."""
+    """Open headed Chromium at the challenge URL on the persistent profile (noVNC).
+
+    Returns ``interactive_ready=true`` only when the headed process stays alive on
+    DISPLAY :99 and VNC accepts connections. Websocket-only noVNC is not success.
+    """
     resolved = paths or SessionPaths.from_env()
     state = read_challenge_state(resolved) or {}
     url = (challenge_url or state.get("challenge_url") or "").strip()
     if not url:
+        raise SessionError("challenge_url_missing")
+    if state and state.get("recovery_available") is False:
         raise SessionError("challenge_url_missing")
     if "/account/login" in url and "showcaptcha" not in url.casefold():
         raise SessionError("challenge_url_is_login")
@@ -255,6 +360,7 @@ def open_challenge_browser(
     if lock.status() == "locked":
         raise SessionError("profile_locked")
 
+    display = os.getenv("HH_DISPLAY") or os.getenv("DISPLAY") or ":99"
     _clear_stale_chromium_singleton(resolved.profile_dir)
     log_path = resolved.state_dir / "challenge-browser.log"
     log_handle = log_path.open("w", encoding="utf-8")
@@ -276,14 +382,15 @@ def open_challenge_browser(
             **os.environ,
             "HH_STATE_DIR": str(resolved.state_dir),
             "HH_PROFILE_DIR": str(resolved.profile_dir),
-            "DISPLAY": os.getenv("HH_DISPLAY") or os.getenv("DISPLAY") or ":99",
-            "HH_DISPLAY": os.getenv("HH_DISPLAY") or os.getenv("DISPLAY") or ":99",
+            "DISPLAY": display,
+            "HH_DISPLAY": display,
         },
     )
     log_handle.close()
     (resolved.state_dir / "challenge-browser.pid").write_text(str(child.pid), encoding="utf-8")
     time.sleep(2.5)
-    if child.poll() is not None:
+    exit_code = child.poll()
+    if exit_code is not None:
         detail = ""
         with contextlib.suppress(OSError):
             detail = log_path.read_text(encoding="utf-8")[-400:]
@@ -291,11 +398,21 @@ def open_challenge_browser(
             raise SessionError("profile_locked")
         raise SessionError("browser_launch_failed")
 
+    display_ready = interactive_display_ready()
+    browser_alive = child.poll() is None
+    interactive_ready = bool(display_ready and browser_alive)
+    if not interactive_ready:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            child.terminate()
+        raise SessionError("interactive_not_ready")
+
     state = dict(state)
     state["challenge_session_available"] = True
     state["handoff_pid"] = child.pid
     state["handoff_opened_at"] = _utc_now()
+    state["handoff_display"] = display
     state["novnc_url"] = novnc_public_url()
+    state["interactive_ready"] = True
     challenge_state_path(resolved).write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -306,6 +423,8 @@ def open_challenge_browser(
         "challenge": state,
         "pid": child.pid,
         "browser_started": True,
+        "interactive_ready": True,
+        "display": display,
         "detached": detach,
     }
 
@@ -412,32 +531,74 @@ def confirm_challenge_cleared(paths: SessionPaths | None = None) -> dict[str, An
 
 def begin_challenge_handoff(
     *,
-    challenge_url: str,
+    challenge_url: str = "",
     challenge_title: str = "",
     run_id: str | None = None,
     vacancy_id: str | None = None,
     progress: dict[str, Any] | None = None,
     screenshot: dict[str, Any] | None = None,
     paths: SessionPaths | None = None,
-    auto_open_browser: bool = True,
+    auto_open_browser: bool = False,
+    existing_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist evidence, optional Telegram notify, optionally open headed challenge."""
-    state = write_challenge_state(
-        challenge_url=challenge_url,
-        challenge_title=challenge_title,
-        run_id=run_id,
-        vacancy_id=vacancy_id,
-        progress=progress,
-        screenshot=screenshot,
-        paths=paths,
-    )
+    """Persist evidence, optional Telegram notify, optionally open headed challenge.
+
+    Does not fabricate challenge URLs. Auto-open defaults off — owner opens noVNC
+    only after explicit open-challenge reports interactive_ready.
+    """
+    url = (challenge_url or "").strip()
+    if existing_state and isinstance(existing_state, dict):
+        state = dict(existing_state)
+        # Refresh progress/screenshot fields when finalize has more context.
+        if progress:
+            merged = dict(state.get("progress") or {})
+            merged.update(progress)
+            state["progress"] = merged
+        if screenshot:
+            state["screenshot_available"] = bool(screenshot.get("screenshot_available"))
+            if screenshot.get("screenshot_filename"):
+                state["screenshot_filename"] = screenshot.get("screenshot_filename")
+            if screenshot.get("screenshot_error"):
+                state["screenshot_error"] = screenshot.get("screenshot_error")
+            state["capture_status"] = classify_capture(
+                challenge_url=str(state.get("challenge_url") or url),
+                screenshot=screenshot,
+            )
+            state["recovery_available"] = state["capture_status"] in {
+                CAPTURE_OK,
+                CAPTURE_NO_SCREENSHOT,
+            } and bool(str(state.get("challenge_url") or url).strip())
+        challenge_state_path(paths).write_text(
+            json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    else:
+        state = write_challenge_state(
+            challenge_url=url,
+            challenge_title=challenge_title,
+            run_id=run_id,
+            vacancy_id=vacancy_id,
+            progress=progress,
+            screenshot=screenshot,
+            paths=paths,
+        )
     notify = notify_challenge_telegram(state)
     opened = False
     open_error = None
-    if auto_open_browser and interactive_display_ready() and novnc_configured():
+    recovery = bool(state.get("recovery_available"))
+    effective_url = str(state.get("challenge_url") or url).strip()
+    if (
+        auto_open_browser
+        and recovery
+        and effective_url
+        and interactive_display_ready()
+        and novnc_configured()
+    ):
         try:
-            open_report = open_challenge_browser(challenge_url=challenge_url, paths=paths)
-            opened = bool(open_report.get("browser_started"))
+            open_report = open_challenge_browser(challenge_url=effective_url, paths=paths)
+            opened = bool(
+                open_report.get("browser_started") and open_report.get("interactive_ready")
+            )
             state = open_report.get("challenge") or read_challenge_state(paths) or state
         except SessionError as error:
             open_error = str(error)
@@ -450,17 +611,26 @@ def begin_challenge_handoff(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    if recovery and effective_url:
+        action: dict[str, Any] = {
+            "code": ACTION_OPEN_CHALLENGE,
+            "novnc_url": state.get("novnc_url")
+            or (novnc_public_url() if novnc_configured() else None),
+            "challenge_url": effective_url,
+        }
+    else:
+        action = {
+            "code": ACTION_CHALLENGE_CAPTURE_FAILED,
+            "novnc_url": None,
+            "challenge_url": None,
+        }
     return {
         "challenge": state,
         "telegram": notify,
         "challenge_session_available": bool(state.get("challenge_session_available")),
         "browser_auto_opened": opened,
-        "action": {
-            "code": ACTION_OPEN_CHALLENGE,
-            "novnc_url": state.get("novnc_url")
-            or (novnc_public_url() if novnc_configured() else None),
-            "challenge_url": challenge_url,
-        },
+        "recovery_available": recovery,
+        "action": action,
     }
 
 
@@ -469,18 +639,24 @@ def public_challenge_view(paths: SessionPaths | None = None) -> dict[str, Any] |
     state = read_challenge_state(paths)
     if not state:
         return None
+    recovery = bool(state.get("recovery_available"))
+    url = state.get("challenge_url")
     return {
         "status": state.get("status"),
         "code": state.get("code"),
         "detected_at": state.get("detected_at"),
-        "challenge_url": state.get("challenge_url"),
+        "challenge_url": url if recovery else None,
         "challenge_title": state.get("challenge_title"),
         "run_id": state.get("run_id"),
         "vacancy_id": state.get("vacancy_id"),
         "progress": state.get("progress") or {},
         "screenshot_available": bool(state.get("screenshot_available")),
+        "screenshot_error": state.get("screenshot_error"),
+        "capture_status": state.get("capture_status"),
+        "recovery_available": recovery,
         "challenge_session_available": bool(state.get("challenge_session_available")),
-        "novnc_url": state.get("novnc_url"),
+        "interactive_ready": bool(state.get("interactive_ready")),
+        "novnc_url": state.get("novnc_url") if recovery else None,
         "note": state.get("note"),
         "telegram_notified": bool((state.get("telegram") or {}).get("notified")),
     }

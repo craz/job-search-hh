@@ -60,19 +60,30 @@ def _novnc_url() -> str:
     return novnc_public_url()
 
 
+def _screenshot_flag(raw: dict[str, Any]) -> bool:
+    shot = raw.get("screenshot")
+    if not isinstance(shot, dict):
+        return False
+    return bool(shot.get("screenshot_available"))
+
+
 def _finalize_captcha_handoff(
     raw: dict[str, Any],
     *,
     report: dict[str, Any],
     resolved: SessionPaths,
 ) -> dict[str, Any]:
-    """Persist challenge evidence and open headed challenge browser when possible."""
+    """Merge live-captured challenge evidence into the acquisition response.
+
+    Screenshot/URL must already be captured in the page reader *before*
+    ``context.close``. This step never fabricates a challenge URL and does not
+    auto-open noVNC (owner must get interactive_ready from open-challenge).
+    """
     from job_search_hh.challenge_handoff import begin_challenge_handoff
 
     challenge_url = str(raw.get("challenge_url") or "").strip()
-    if not challenge_url:
-        challenge_url = "https://hh.ru/captcha"
     screenshot = raw.get("screenshot") if isinstance(raw.get("screenshot"), dict) else {}
+    existing = raw.get("challenge") if isinstance(raw.get("challenge"), dict) else None
     pagination = report.get("pagination") if isinstance(report.get("pagination"), dict) else {}
     progress = {
         "pages_fetched": pagination.get("pages_fetched") or len(report.get("pages") or []),
@@ -88,16 +99,35 @@ def _finalize_captcha_handoff(
             progress=progress,
             screenshot=screenshot,
             paths=resolved,
-            auto_open_browser=True,
+            auto_open_browser=False,
+            existing_state=existing,
         )
     except Exception:  # noqa: BLE001 - acquisition must still return captcha status
+        recovery = bool(challenge_url)
         return {
-            "action": {"code": "open_challenge", "novnc_url": _novnc_url(), "challenge_url": challenge_url},
-            "challenge": {
+            "action": (
+                {
+                    "code": "open_challenge",
+                    "novnc_url": _novnc_url(),
+                    "challenge_url": challenge_url,
+                }
+                if recovery
+                else {
+                    "code": "challenge_capture_failed",
+                    "novnc_url": None,
+                    "challenge_url": None,
+                }
+            ),
+            "challenge": existing
+            or {
                 "screenshot_available": bool(screenshot.get("screenshot_available")),
-                "challenge_url": challenge_url,
+                "screenshot_error": screenshot.get("screenshot_error"),
+                "challenge_url": challenge_url or None,
                 "challenge_session_available": False,
+                "recovery_available": recovery,
+                "capture_status": "captured" if recovery else "capture_failed",
             },
+            "recovery_available": recovery,
         }
 
 
@@ -187,6 +217,30 @@ def _read_vacancy_pages(
     summaries_for_detail: list[str] = []
     pages_planned = len(page_urls)
     page_from = page_urls[0][0] if page_urls else 0
+
+    def _persist_captcha_before_close(
+        page: Any,
+        *,
+        vacancy_id: str | None = None,
+        challenge_url_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Capture URL/title/PNG and write challenge_active before context.close."""
+        from job_search_hh.challenge_handoff import capture_and_persist_live_challenge
+
+        progress = {
+            "pages_fetched": len(pages_out),
+            "pages_planned": pages_planned,
+            "page_from": page_from,
+            "page_current": pages_out[-1]["page"] if pages_out else page_from,
+            "checked_count": len(set(summaries_for_detail)),
+            "phase": "captcha_required",
+        }
+        return capture_and_persist_live_challenge(
+            page,
+            challenge_url_hint=challenge_url_hint,
+            vacancy_id=vacancy_id,
+            progress=progress,
+        )
 
     def _emit_page_progress(page_index: int) -> None:
         if on_page_progress is None:
@@ -278,17 +332,21 @@ def _read_vacancy_pages(
                     }
                     if kind == "captcha_or_action_required":
                         try:
-                            from job_search_hh.challenge_handoff import (
-                                capture_challenge_screenshot,
+                            evidence = _persist_captcha_before_close(
+                                page,
+                                challenge_url_hint=wall_payload["challenge_url"],
                             )
-
-                            wall_payload["screenshot"] = capture_challenge_screenshot(page)
-                            try:
-                                wall_payload["challenge_title"] = str(page.title() or "")
-                            except Exception:  # noqa: BLE001
-                                wall_payload["challenge_title"] = ""
+                            wall_payload["challenge_url"] = evidence.get("challenge_url") or ""
+                            wall_payload["challenge_title"] = evidence.get("challenge_title") or ""
+                            wall_payload["screenshot"] = evidence.get("screenshot") or {
+                                "screenshot_available": False
+                            }
+                            wall_payload["challenge"] = evidence.get("challenge")
                         except Exception:  # noqa: BLE001
-                            wall_payload["screenshot"] = {"screenshot_available": False}
+                            wall_payload["screenshot"] = {
+                                "screenshot_available": False,
+                                "screenshot_error": "persist_failed",
+                            }
                     return wall_payload
                 status = "ok" if kind in {"ok", "empty"} else "failed"
                 code = (
@@ -340,15 +398,22 @@ def _read_vacancy_pages(
                         except Exception:  # noqa: BLE001
                             page_title = ""
                         if looks_like_hh_challenge(url=final_url, title=page_title):
-                            screenshot = {}
+                            evidence: dict[str, Any] = {}
                             try:
-                                from job_search_hh.challenge_handoff import (
-                                    capture_challenge_screenshot,
+                                evidence = _persist_captcha_before_close(
+                                    page,
+                                    vacancy_id=external_id,
+                                    challenge_url_hint=final_url,
                                 )
-
-                                screenshot = capture_challenge_screenshot(page)
                             except Exception:  # noqa: BLE001
-                                screenshot = {"screenshot_available": False}
+                                evidence = {
+                                    "challenge_url": final_url,
+                                    "challenge_title": page_title,
+                                    "screenshot": {
+                                        "screenshot_available": False,
+                                        "screenshot_error": "persist_failed",
+                                    },
+                                }
                             if on_page_progress is not None:
                                 try:
                                     on_page_progress(
@@ -361,7 +426,8 @@ def _read_vacancy_pages(
                                             ),
                                             "checked_count": len(set(summaries_for_detail)),
                                             "phase": "captcha_required",
-                                            "challenge_url": final_url,
+                                            "challenge_url": evidence.get("challenge_url")
+                                            or final_url,
                                             "challenge_vacancy_id": external_id,
                                         }
                                     )
@@ -372,9 +438,11 @@ def _read_vacancy_pages(
                                 "pages": pages_out,
                                 "details": details_out,
                                 "wall_detail_id": external_id,
-                                "challenge_url": final_url,
-                                "challenge_title": page_title,
-                                "screenshot": screenshot,
+                                "challenge_url": evidence.get("challenge_url") or final_url,
+                                "challenge_title": evidence.get("challenge_title") or page_title,
+                                "screenshot": evidence.get("screenshot")
+                                or {"screenshot_available": False},
+                                "challenge": evidence.get("challenge"),
                             }
                         page.wait_for_timeout(min(2_000, max(500, timeout_ms // 25)))
                         raw_detail = extract_detail_page(page)
@@ -438,25 +506,48 @@ def _read_vacancy_pages(
                                 )
                             except Exception:  # noqa: BLE001
                                 pass
-                        screenshot = {}
+                        evidence: dict[str, Any] = {}
                         if kind == "captcha_or_action_required":
                             try:
-                                from job_search_hh.challenge_handoff import (
-                                    capture_challenge_screenshot,
+                                meta = (
+                                    (raw_detail or {}).get("meta")
+                                    if isinstance(raw_detail, dict)
+                                    else {}
                                 )
-
-                                screenshot = capture_challenge_screenshot(page)
+                                hint = ""
+                                if isinstance(meta, dict):
+                                    hint = str(meta.get("challenge_url") or "")
+                                evidence = _persist_captcha_before_close(
+                                    page,
+                                    vacancy_id=external_id,
+                                    challenge_url_hint=hint
+                                    or str(getattr(page, "url", "") or ""),
+                                )
                             except Exception:  # noqa: BLE001
-                                screenshot = {"screenshot_available": False}
+                                evidence = {
+                                    "challenge_url": str(getattr(page, "url", "") or ""),
+                                    "screenshot": {
+                                        "screenshot_available": False,
+                                        "screenshot_error": "persist_failed",
+                                    },
+                                }
                         payload = {
                             "kind": kind,
                             "pages": pages_out,
                             "details": details_out,
                             "wall_detail_id": external_id,
-                            "challenge_url": str(getattr(page, "url", "") or ""),
+                            "challenge_url": str(
+                                evidence.get("challenge_url")
+                                or getattr(page, "url", "")
+                                or ""
+                            ),
                         }
-                        if screenshot:
-                            payload["screenshot"] = screenshot
+                        if evidence.get("challenge_title"):
+                            payload["challenge_title"] = evidence["challenge_title"]
+                        if evidence.get("screenshot"):
+                            payload["screenshot"] = evidence["screenshot"]
+                        if evidence.get("challenge"):
+                            payload["challenge"] = evidence["challenge"]
                         return payload
                     normalized_detail = normalize_detail_payload(
                         raw_detail if isinstance(raw_detail, dict) else {}
@@ -762,14 +853,11 @@ def acquire_vacancies(
                 "status": STATUS_ACTION_REQUIRED,
                 "code": "browser_captcha_or_action_required",
                 "action": handoff.get("action")
-                or {"code": "open_challenge", "novnc_url": _novnc_url()},
-                "challenge_url": raw.get("challenge_url"),
+                or {"code": "challenge_capture_failed", "novnc_url": None},
+                "challenge_url": raw.get("challenge_url") or None,
                 "challenge": handoff.get("challenge"),
-                "screenshot_available": bool(
-                    ((raw.get("screenshot") or {}) if isinstance(raw.get("screenshot"), dict) else {}).get(
-                        "screenshot_available"
-                    )
-                ),
+                "screenshot_available": _screenshot_flag(raw),
+                "recovery_available": bool(handoff.get("recovery_available")),
             }
         )
     if wall == "permission_blocked" and ok_pages == 0:
@@ -832,15 +920,12 @@ def acquire_vacancies(
                 "status": STATUS_ACTION_REQUIRED,
                 "code": "browser_captcha_or_action_required",
                 "action": handoff.get("action")
-                or {"code": "open_challenge", "novnc_url": _novnc_url()},
-                "challenge_url": raw.get("challenge_url"),
+                or {"code": "challenge_capture_failed", "novnc_url": None},
+                "challenge_url": raw.get("challenge_url") or None,
                 "wall_detail_id": raw.get("wall_detail_id"),
                 "challenge": handoff.get("challenge"),
-                "screenshot_available": bool(
-                    ((raw.get("screenshot") or {}) if isinstance(raw.get("screenshot"), dict) else {}).get(
-                        "screenshot_available"
-                    )
-                ),
+                "screenshot_available": _screenshot_flag(raw),
+                "recovery_available": bool(handoff.get("recovery_available")),
             }
         )
     if wall == "permission_blocked":

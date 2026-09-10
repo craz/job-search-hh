@@ -386,7 +386,14 @@ class ApiHandler(BaseHTTPRequestHandler):
         except SessionError as error:
             self._json(
                 HTTPStatus.CONFLICT,
-                {"code": str(error), "message": str(error), "connection": connection_status()},
+                {
+                    "code": str(error),
+                    "message": str(error),
+                    "connection": connection_status(),
+                    "browser_started": False,
+                    "interactive_ready": False,
+                    "ok": False,
+                },
             )
             return
 
