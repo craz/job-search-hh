@@ -29,7 +29,7 @@ packages = ["src/job_search_hh"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--strict-markers --strict-config"
+addopts = "--strict-markers --strict-config --import-mode=importlib"
 filterwarnings = ["error"]
 
 [tool.ruff]
@@ -39,6 +39,10 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Long CAPTCHA regexes live inside Playwright JS string literals.
+"src/job_search_hh/vacancy_extractors.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

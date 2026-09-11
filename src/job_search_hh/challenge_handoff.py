@@ -408,7 +408,8 @@ def notify_challenge_telegram(state: dict[str, Any]) -> dict[str, Any]:
         return {"notified": False, "reason": "telegram_not_configured"}
     token = (os.getenv("TELEGRAM_DM_BOT_TOKEN") or "").strip()
     chat = (os.getenv("TELEGRAM_DM_CHAT_ID") or "").strip()
-    progress = state.get("progress") if isinstance(state.get("progress"), dict) else {}
+    progress_obj = state.get("progress")
+    progress: dict[str, Any] = progress_obj if isinstance(progress_obj, dict) else {}
     pages = progress.get("pages_fetched")
     planned = progress.get("pages_planned")
     checked = progress.get("checked_count")
@@ -861,7 +862,9 @@ def _inspect_live_challenge_browser(
                     dom_hit = False
                     if not cand_hit:
                         try:
-                            dom_hit, _sigs = challenge_dom_hit(candidate.evaluate(_CHALLENGE_DOM_JS))
+                            dom_hit, _sigs = challenge_dom_hit(
+                                candidate.evaluate(_CHALLENGE_DOM_JS)
+                            )
                         except Exception:  # noqa: BLE001
                             dom_hit = False
                     if cand_hit or dom_hit:

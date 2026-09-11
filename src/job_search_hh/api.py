@@ -26,8 +26,8 @@ from job_search_hh.resume_sync import sync_resume_content
 from job_search_hh.resumes import _list_resumes_raw, list_resumes
 from job_search_hh.search_run_orchestration import run_resume_suitable_search, run_vacancy_search
 from job_search_hh.session import SessionError, SessionPaths, clear_login, confirm_login, open_login
-from job_search_hh.vacancy_source_status import check_vacancy_source_status
 from job_search_hh.vacancy_content_refresh import refresh_vacancy_content
+from job_search_hh.vacancy_source_status import check_vacancy_source_status
 
 
 def _secret_leak(payload: dict[str, Any]) -> bool:

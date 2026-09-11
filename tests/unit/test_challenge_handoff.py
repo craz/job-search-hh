@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
-import types
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +15,7 @@ from job_search_hh.challenge_handoff import (
     CAPTURE_FAILED,
     CAPTURE_NO_SCREENSHOT,
     CAPTURE_OK,
+    _confirm_probe_urls,
     begin_challenge_handoff,
     captcha_tg_configured,
     capture_and_persist_live_challenge,
@@ -28,7 +27,6 @@ from job_search_hh.challenge_handoff import (
     public_challenge_view,
     read_challenge_state,
     write_challenge_state,
-    _confirm_probe_urls,
 )
 from job_search_hh.session import SessionError, SessionPaths, confirm_login
 from job_search_hh.vacancy_browser import STATUS_ACTION_REQUIRED, acquire_vacancies

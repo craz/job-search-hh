@@ -38,9 +38,7 @@ def looks_like_hh_challenge(*, url: str = "", title: str = "") -> bool:
     """True when URL/title indicate an HH CAPTCHA / bot-challenge gate."""
     if url and _CHALLENGE_URL_RE.search(url):
         return True
-    if title and _CHALLENGE_TITLE_RE.search(title):
-        return True
-    return False
+    return bool(title and _CHALLENGE_TITLE_RE.search(title))
 
 
 # DOM probe returns {hit, signals[]} — never bare substring "robot"/"робот"

@@ -7,6 +7,7 @@ HH or Core, and never bypasses login/CAPTCHA walls.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -106,9 +107,12 @@ def _finalize_captcha_handoff(
     from job_search_hh.challenge_handoff import begin_challenge_handoff
 
     challenge_url = str(raw.get("challenge_url") or "").strip()
-    screenshot = raw.get("screenshot") if isinstance(raw.get("screenshot"), dict) else {}
-    existing = raw.get("challenge") if isinstance(raw.get("challenge"), dict) else None
-    pagination = report.get("pagination") if isinstance(report.get("pagination"), dict) else {}
+    screenshot_obj = raw.get("screenshot")
+    screenshot: dict[str, Any] = screenshot_obj if isinstance(screenshot_obj, dict) else {}
+    existing_obj = raw.get("challenge")
+    existing = existing_obj if isinstance(existing_obj, dict) else None
+    pagination_obj = report.get("pagination")
+    pagination: dict[str, Any] = pagination_obj if isinstance(pagination_obj, dict) else {}
     progress = {
         "pages_fetched": pagination.get("pages_fetched") or len(report.get("pages") or []),
         "pages_planned": pagination.get("max_pages"),
@@ -316,10 +320,8 @@ def _read_vacancy_pages(
         }
         if source_total is not None:
             payload["source_total"] = source_total
-        try:
+        with contextlib.suppress(Exception):  # progress must not abort acquisition
             on_page_progress(payload)
-        except Exception:  # noqa: BLE001 - progress must not abort acquisition
-            pass
 
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(
@@ -369,7 +371,9 @@ def _read_vacancy_pages(
                     }
                     if kind == "captcha_or_action_required":
                         try:
-                            meta_obj = normalized.get("meta") if isinstance(normalized, dict) else {}
+                            meta_obj = (
+                                normalized.get("meta") if isinstance(normalized, dict) else {}
+                            )
                             serp_signals: list[str] = []
                             if isinstance(meta_obj, dict):
                                 raw_sigs = meta_obj.get("matched_signals") or []
@@ -433,7 +437,7 @@ def _read_vacancy_pages(
 
             if fetch_details and summaries_for_detail:
                 if on_page_progress is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         on_page_progress(
                             {
                                 "pages_fetched": len(pages_out),
@@ -444,8 +448,6 @@ def _read_vacancy_pages(
                                 "phase": "details",
                             }
                         )
-                    except Exception:  # noqa: BLE001
-                        pass
                 # Create-only: optionally drop ids Core already owns before detail work.
                 unique_serp_ids: list[str] = list(dict.fromkeys(summaries_for_detail))
                 allow = [str(x).strip() for x in (detail_ids or []) if str(x).strip()]
@@ -475,9 +477,7 @@ def _read_vacancy_pages(
                             "pages_fetched": len(pages_out),
                             "pages_planned": pages_planned,
                             "page_from": page_from,
-                            "page_current": (
-                                pages_out[-1]["page"] if pages_out else page_from
-                            ),
+                            "page_current": (pages_out[-1]["page"] if pages_out else page_from),
                             "checked_count": len(set(summaries_for_detail)),
                             "unchanged_count": already_known,
                             "detail_planned": detail_planned,
@@ -490,7 +490,7 @@ def _read_vacancy_pages(
                         pass
 
                 _emit_detail_progress()
-                for detail_idx, external_id in enumerate(detail_targets):
+                for _detail_idx, external_id in enumerate(detail_targets):
                     detail_url = DEFAULT_VACANCY_URL_TEMPLATE.format(external_id=external_id)
                     try:
                         page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
@@ -502,7 +502,7 @@ def _read_vacancy_pages(
                         except Exception:  # noqa: BLE001
                             page_title = ""
                         if looks_like_hh_challenge(url=final_url, title=page_title):
-                            evidence: dict[str, Any] = {}
+                            evidence = {}
                             try:
                                 from job_search_hh.vacancy_extractors import (
                                     diagnose_challenge_signals,
@@ -539,7 +539,7 @@ def _read_vacancy_pages(
                                 )
                                 continue
                             if on_page_progress is not None:
-                                try:
+                                with contextlib.suppress(Exception):
                                     on_page_progress(
                                         {
                                             "pages_fetched": len(pages_out),
@@ -555,8 +555,6 @@ def _read_vacancy_pages(
                                             "challenge_vacancy_id": external_id,
                                         }
                                     )
-                                except Exception:  # noqa: BLE001
-                                    pass
                             return {
                                 "kind": "captcha_or_action_required",
                                 "pages": pages_out,
@@ -616,7 +614,7 @@ def _read_vacancy_pages(
                                 )
                             except Exception:  # noqa: BLE001
                                 pass
-                        evidence: dict[str, Any] = {}
+                        evidence = {}
                         if kind == "captcha_or_action_required":
                             try:
                                 meta = (

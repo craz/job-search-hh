@@ -82,7 +82,8 @@ def classify_recovery(
 
     if code_value in _CODE_CAPTCHA or (
         status_value in _STATUS_ACTION
-        and action_value in {"confirm_login", "acquire_token", "open_challenge", "confirm_challenge"}
+        and action_value
+        in {"confirm_login", "acquire_token", "open_challenge", "confirm_challenge"}
     ):
         kind = RECOVERY_CAPTCHA_OR_ACTION
     elif code_value in _CODE_EXTERNAL or status_value in _STATUS_EXTERNAL:

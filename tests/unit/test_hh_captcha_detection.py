@@ -23,7 +23,9 @@ def _paths(tmp_path: Path) -> SessionPaths:
 
 
 class _FakePage:
-    def __init__(self, *, url: str, title: str = "", evaluate_payload: dict[str, Any] | None = None):
+    def __init__(
+        self, *, url: str, title: str = "", evaluate_payload: dict[str, Any] | None = None
+    ):
         self.url = url
         self._title = title
         self._evaluate_payload = evaluate_payload or {}
@@ -44,9 +46,7 @@ def test_looks_like_hh_challenge_url_and_title() -> None:
     assert looks_like_hh_challenge(url="https://hh.ru/account/login?backurl=/showcaptcha")
     assert looks_like_hh_challenge(url="https://hh.ru/captcha?from=vacancy")
     assert looks_like_hh_challenge(url="https://hh.ru/vacancy/1", title="SmartCaptcha")
-    assert not looks_like_hh_challenge(
-        url="https://hh.ru/vacancy/123456", title="Python developer"
-    )
+    assert not looks_like_hh_challenge(url="https://hh.ru/vacancy/123456", title="Python developer")
     # Regression A: vacancy title containing "Robotics" must NOT match.
     assert not looks_like_hh_challenge(
         url="https://hh.ru/vacancy/137205192",
@@ -99,7 +99,6 @@ def test_mid_details_captcha_stops_further_processing(
     progress_phases: list[str] = []
 
     def reader(**_kwargs: Any) -> dict[str, Any]:
-        on_progress = _kwargs.get("on_page_progress")
         pages = [
             {
                 "page": 0,
@@ -183,9 +182,7 @@ def test_regression_a_robotics_title_not_challenge() -> None:
     url = "https://hh.ru/vacancy/137205192"
     title = "Technical Project Manager — Robotics"
     assert not looks_like_hh_challenge(url=url, title=title)
-    assert not challenge_context_confirmed(
-        url=url, title=title, matched_signals=["dom_title"]
-    )
+    assert not challenge_context_confirmed(url=url, title=title, matched_signals=["dom_title"])
 
 
 def test_regression_b_real_captcha_title_and_url_still_match() -> None:

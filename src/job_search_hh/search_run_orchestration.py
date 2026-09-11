@@ -342,7 +342,7 @@ def run_vacancy_search(
         "hh_cards_fetched": len(details),
         "detail_errors": sum(1 for d in details.values() if str(d.get("status")) != "ok"),
     }
-    # pagination metadata    # pagination metadata (max_pages_reached / exhausted) lives on acquisition;
+    # Pagination metadata (max_pages_reached / exhausted) lives on acquisition;
     # intentional max_pages bound alone is success, not partial.
 
     # Terminal status matrix.

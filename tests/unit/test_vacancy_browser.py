@@ -536,14 +536,14 @@ def test_acquire_respects_max_pages_cap(tmp_path: Path, monkeypatch: pytest.Monk
                     "page": index,
                     "status": "ok",
                     "code": "ready",
-                        "items": [
-                            {
-                                "external_id": f"v{index}-{slot}",
-                                "title": "T",
-                                "url": f"https://hh.ru/vacancy/{index}-{slot}",
-                            }
-                            for slot in range(50)
-                        ],
+                    "items": [
+                        {
+                            "external_id": f"v{index}-{slot}",
+                            "title": "T",
+                            "url": f"https://hh.ru/vacancy/{index}-{slot}",
+                        }
+                        for slot in range(50)
+                    ],
                     "meta": {"found_text": "Найдено 2845 подходящих вакансий для резюме"},
                 }
                 for index, _ in page_urls
