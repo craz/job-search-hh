@@ -5,6 +5,13 @@ Semantic Versioning.
 
 ## Unreleased
 
+### Changed
+
+- Live create-only detail progress: emit `detail_planned` / `detail_fetched` /
+  `unchanged_count` after every HH card (not only every 10th) so Web can show
+  «Карточек HH загружено Z из Y».
+
+
 ### Added
 
 - Detail extract: JSON-LD JobPosting `datePosted` (fallback page-state `publicationTime.$`) → `source_published_at` on NEW detail ingest; timezone normalized to UTC. No extra HH request; create-only unchanged.

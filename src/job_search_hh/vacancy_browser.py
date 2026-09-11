@@ -463,7 +463,34 @@ def _read_vacancy_pages(
                     allowed_new = {str(x).strip() for x in filtered if str(x).strip()}
                     candidate_ids = [i for i in candidate_ids if i in allowed_new]
                 limit = max(0, min(int(detail_limit), 1000))
-                for detail_idx, external_id in enumerate(candidate_ids[:limit]):
+                detail_targets = candidate_ids[:limit]
+                detail_planned = len(detail_targets)
+                already_known = max(0, len(set(summaries_for_detail)) - detail_planned)
+
+                def _emit_detail_progress(*, phase: str = "details", **extra: object) -> None:
+                    if on_page_progress is None:
+                        return
+                    try:
+                        payload = {
+                            "pages_fetched": len(pages_out),
+                            "pages_planned": pages_planned,
+                            "page_from": page_from,
+                            "page_current": (
+                                pages_out[-1]["page"] if pages_out else page_from
+                            ),
+                            "checked_count": len(set(summaries_for_detail)),
+                            "unchanged_count": already_known,
+                            "detail_planned": detail_planned,
+                            "detail_fetched": len(details_out),
+                            "phase": phase,
+                        }
+                        payload.update(extra)
+                        on_page_progress(payload)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                _emit_detail_progress()
+                for detail_idx, external_id in enumerate(detail_targets):
                     detail_url = DEFAULT_VACANCY_URL_TEMPLATE.format(external_id=external_id)
                     try:
                         page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
@@ -554,22 +581,7 @@ def _read_vacancy_pages(
                                 "content": None,
                             }
                         )
-                        if on_page_progress is not None and detail_idx % 10 == 9:
-                            try:
-                                on_page_progress(
-                                    {
-                                        "pages_fetched": len(pages_out),
-                                        "pages_planned": pages_planned,
-                                        "page_from": page_from,
-                                        "page_current": (
-                                            pages_out[-1]["page"] if pages_out else page_from
-                                        ),
-                                        "checked_count": len(set(summaries_for_detail)),
-                                        "phase": "details",
-                                    }
-                                )
-                            except Exception:  # noqa: BLE001
-                                pass
+                        _emit_detail_progress()
                         continue
                     kind = str((raw_detail or {}).get("kind") or "invalid")
                     if kind in {
@@ -684,22 +696,8 @@ def _read_vacancy_pages(
                                 "content": None,
                             }
                         )
-                    if on_page_progress is not None and detail_idx % 10 == 9:
-                        try:
-                            on_page_progress(
-                                {
-                                    "pages_fetched": len(pages_out),
-                                    "pages_planned": pages_planned,
-                                    "page_from": page_from,
-                                    "page_current": (
-                                        pages_out[-1]["page"] if pages_out else page_from
-                                    ),
-                                    "checked_count": len(set(summaries_for_detail)),
-                                    "phase": "details",
-                                }
-                            )
-                        except Exception:  # noqa: BLE001
-                            pass
+                    # Live create-only counters: emit after every card.
+                    _emit_detail_progress()
         finally:
             context.close()
 
